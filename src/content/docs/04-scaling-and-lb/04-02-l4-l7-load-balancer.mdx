@@ -1,0 +1,209 @@
+---
+title: "L4/L7 로드밸런서 동작 원리"
+description: OSI 레이어 4(TCP)와 레이어 7(HTTP) 로드밸런서의 동작 방식, 주요 알고리즘, 그리고 AI 추론 서비스에서의 선택 기준을 이해한다.
+sidebar:
+  order: 2
+learning_objectives:
+  - "L4와 L7 로드밸런서의 동작 레이어 차이와 각 기능을 설명할 수 있다"
+  - "Round Robin, Least Connections, IP Hash 알고리즘의 차이를 이해한다"
+  - "Sticky Session과 Canary 배포에서 L7 LB가 필요한 이유를 설명할 수 있다"
+prerequisites:
+  - "OSI 7계층 모델 기본 개념"
+  - "TCP/IP와 HTTP의 기본 이해"
+estimated_minutes: 20
+references:
+  - title: "nginx — Load Balancing"
+    url: "https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/"
+    accessed: "2026-04-14"
+  - title: "AWS — Elastic Load Balancing features"
+    url: "https://aws.amazon.com/elasticloadbalancing/features/"
+    accessed: "2026-04-14"
+  - title: "HAProxy — The Load Balancer"
+    url: "https://www.haproxy.org/"
+    accessed: "2026-04-14"
+---
+
+로드밸런서는 클라이언트 요청을 여러 서버에 분산하는 컴포넌트다. "어느 레이어에서 트래픽을 이해하느냐"에 따라 L4와 L7로 나뉘며, 이 차이가 할 수 있는 일과 할 수 없는 일을 결정한다.
+
+## L4 로드밸런서 (Transport Layer)
+
+TCP/UDP 수준에서 동작한다. IP 주소와 포트 번호만 보고 트래픽을 분산한다. HTTP 요청 내용은 읽지 않는다.
+
+```text
+클라이언트                L4 LB                  서버
+  :12345                                         서버A :8080
+    │                   ┌──────┐                 서버B :8080
+    │── TCP SYN ────────>│      │── TCP SYN ────>│서버C :8080
+    │<─ TCP SYN-ACK ─────│ IP/  │<─ TCP SYN-ACK ─│
+    │── 데이터 ──────────>│ Port │── 데이터 ──────>│
+    │                   │ 기반  │                 │
+    │                   └──────┘
+```
+
+**특징:**
+- 매우 빠름 (패킷 헤더만 처리)
+- SSL 종료 없음 (암호화된 채로 서버에 전달)
+- HTTP URL/헤더/쿠키 기반 라우팅 불가
+- TCP 연결 단위 분산
+
+**사용 예:** AWS NLB(Network Load Balancer), HAProxy TCP 모드
+
+## L7 로드밸런서 (Application Layer)
+
+HTTP까지 파싱한다. URL 경로, 헤더, 쿠키, 요청 바디를 읽고 라우팅 결정을 내릴 수 있다.
+
+```text
+클라이언트                L7 LB                     서버
+    │                   ┌────────────────────┐      API 서버 × 3
+    │── GET /api/chat ──>│ HTTP 파싱          │──>   
+    │                   │ URL 기반 라우팅    │      모델 서버 × 2
+    │── POST /model/ ───>│ 헤더 검사         │──>   
+    │                   │ 쿠키 확인          │      정적 서버 × 1
+    │── GET /static/ ───>│ 인증 토큰 확인    │──>   
+    │                   └────────────────────┘
+```
+
+**특징:**
+- SSL 종료 가능 (LB에서 복호화 후 평문으로 서버에 전달)
+- URL 경로, 헤더, 호스트명 기반 라우팅
+- 쿠키 기반 Sticky Session
+- Canary 배포 (특정 헤더가 있는 요청만 새 버전으로)
+- HTTP 요청/응답 로깅, 변환
+
+**사용 예:** AWS ALB(Application Load Balancer), nginx, HAProxy HTTP 모드
+
+## L4 vs L7 비교
+
+| 항목 | L4 | L7 |
+|------|----|----|
+| 동작 레이어 | TCP/UDP | HTTP/HTTPS |
+| 처리 속도 | 매우 빠름 | L4 대비 느림 (파싱 비용) |
+| SSL 종료 | 불가 | 가능 |
+| URL 기반 라우팅 | 불가 | 가능 |
+| Sticky Session | IP Hash만 | 쿠키 기반 |
+| Canary 배포 | 불가 | 가능 |
+| WebSocket | TCP 통과 | 설정 필요 |
+| gRPC | TCP 통과 | HTTP/2 지원 필요 |
+| 대표 제품 | NLB, HAProxy TCP | ALB, nginx, HAProxy HTTP |
+
+## 로드밸런싱 알고리즘
+
+### Round Robin
+
+```text
+요청 순서: 1 → 서버A, 2 → 서버B, 3 → 서버C, 4 → 서버A ...
+
+장점: 단순, 균등 분산
+단점: 서버 응답 속도 차이 무시 (느린 서버에도 동일 비율 전송)
+```
+
+### Least Connections
+
+```text
+현재 연결:  서버A=10, 서버B=3, 서버C=7
+다음 요청: → 서버B (가장 적은 연결)
+
+장점: 처리 중인 요청이 많은 서버 회피
+단점: 연결 수가 처리 부하를 완전히 대변하지 않을 수 있음
+ML 추론처럼 요청마다 처리 시간이 크게 다를 때 효과적
+```
+
+### IP Hash
+
+```text
+hash(클라이언트 IP) % 서버수 = 서버 인덱스
+
+장점: 동일 클라이언트는 항상 같은 서버 (간단한 Sticky)
+단점: NAT 뒤 다수 사용자가 같은 서버에 몰릴 수 있음
+```
+
+### Weighted Round Robin
+
+```text
+서버A weight=3, 서버B weight=1
+패턴: A, A, A, B, A, A, A, B ...
+
+사용 예: GPU 서버(가중치 높음)와 CPU 폴백 서버(가중치 낮음) 혼합
+```
+
+## nginx L7 로드밸런서 설정
+
+```nginx
+upstream api_servers {
+    least_conn;  # Least Connections 알고리즘
+
+    server api1:8000 weight=3;
+    server api2:8000 weight=3;
+    server api3:8000 weight=1;  # 낮은 사양 서버
+
+    keepalive 32;  # 업스트림 연결 재사용
+}
+
+upstream model_servers {
+    least_conn;
+    server gpu1:8080;
+    server gpu2:8080;
+    keepalive 16;
+}
+
+server {
+    listen 443 ssl;
+
+    # SSL 종료 (L7 기능)
+    ssl_certificate     /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+    # URL 기반 라우팅 (L7 기능)
+    location /api/ {
+        proxy_pass http://api_servers;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location /model/ {
+        proxy_pass http://model_servers;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 300s;  # 추론 타임아웃
+    }
+}
+```
+
+## Sticky Session과 Canary 배포
+
+### Sticky Session (L7 쿠키 기반)
+
+```nginx
+upstream backends {
+    ip_hash;  # 또는 쿠키 기반 (nginx plus 기능)
+    server backend1:8000;
+    server backend2:8000;
+}
+```
+
+ML 추론 서비스에서 Sticky Session이 필요한 경우: 모델의 KV 캐시나 대화 이력을 특정 워커 메모리에 저장하는 경우. 그러나 이는 Stateless 설계 원칙에 어긋나므로 가능하면 Redis 같은 외부 저장소로 상태를 분리하는 것이 권장된다.
+
+### Canary 배포
+
+```nginx
+# 요청의 10%를 새 버전으로 라우팅
+split_clients "${remote_addr}" $variant {
+    10%   new_version;
+    *     stable_version;
+}
+
+upstream new_version { server new:8000; }
+upstream stable_version { server stable:8000; }
+
+location /api/ {
+    proxy_pass http://$variant;
+}
+```
+
+## 핵심 정리
+
+- L4는 IP/포트만 보고 TCP 연결을 분산한다. 빠르지만 HTTP 내용을 알 수 없다
+- L7은 HTTP를 파싱해 URL, 헤더, 쿠키 기반 라우팅이 가능하다. SSL 종료도 L7에서 처리한다
+- ML 추론처럼 요청마다 처리 시간이 다른 경우 Least Connections 알고리즘이 효과적이다
+- nginx는 L7 LB로 URL 기반 라우팅, SSL 종료, Canary 배포를 단일 설정으로 처리한다
+- Sticky Session은 Stateless 설계의 예외이므로 가능하면 외부 상태 저장소로 대체한다

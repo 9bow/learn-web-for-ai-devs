@@ -1,0 +1,264 @@
+---
+title: "성능"
+description: 백엔드, 프론트엔드, ML 서빙 각 레이어에서 실질적인 성능 개선을 달성하는 전략을 다룬다.
+sidebar:
+  order: 2
+learning_objectives:
+  - "async/await, DB 인덱스, 캐싱으로 백엔드 응답 시간을 줄일 수 있다"
+  - "번들 최적화, lazy loading, CDN으로 프론트엔드 로딩 속도를 개선할 수 있다"
+  - "lifespan과 배치 추론으로 ML 모델 서빙 처리량을 높일 수 있다"
+prerequisites:
+  - "FastAPI 기초 (섹션 07)"
+  - "React와 Next.js (섹션 06)"
+  - "ML 모델 서빙 기본 경험"
+estimated_minutes: 25
+references:
+  - title: "FastAPI 성능 가이드"
+    url: "https://fastapi.tiangolo.com/async/"
+    accessed: "2026-04-14"
+  - title: "Vite 빌드 최적화"
+    url: "https://vitejs.dev/guide/features.html#build-optimizations"
+    accessed: "2026-04-14"
+  - title: "SQLAlchemy 성능 가이드"
+    url: "https://docs.sqlalchemy.org/en/20/orm/queryguide/index.html"
+    accessed: "2026-04-14"
+---
+
+AI/ML 서비스의 성능 병목은 **세 곳**에서 발생한다: 백엔드 I/O 대기, 프론트엔드 번들 크기, ML 추론 오버헤드. 각각을 독립적으로 최적화해야 전체 사용자 경험이 개선된다.
+
+## 백엔드 성능
+
+### async/await로 I/O 비차단
+
+FastAPI의 최대 장점은 비동기 처리다. 동기 함수로 작성하면 이 장점이 사라진다.
+
+```python
+# 느린 코드 — 동기 DB 호출이 이벤트 루프를 블로킹
+@app.get("/api/todos")
+def get_todos(db: Session = Depends(get_sync_db)):
+    return db.query(Todo).all()  # 스레드 풀을 점유
+
+# 빠른 코드 — 비동기 DB 호출
+@app.get("/api/todos")
+async def get_todos(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Todo))
+    return result.scalars().all()
+```
+
+CPU bound 작업(ML 추론 등)은 `asyncio.run_in_executor`로 스레드 풀에 오프로드한다.
+
+```python
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor(max_workers=4)
+
+@app.post("/api/predict")
+async def predict(data: PredictRequest):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(executor, model.predict, data.features)
+    return {"prediction": result}
+```
+
+### DB 인덱스
+
+N+1 쿼리와 인덱스 누락은 가장 흔한 성능 저하 원인이다.
+
+```python
+# SQLAlchemy 모델에서 인덱스 정의
+class Todo(Base):
+    __tablename__ = "todos"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)  # 자주 필터링하는 컬럼
+    created_at = Column(DateTime, index=True)                       # 정렬에 사용하는 컬럼
+    title = Column(String(200))
+
+    # 복합 인덱스 — user_id로 필터 후 created_at으로 정렬하는 쿼리 최적화
+    __table_args__ = (
+        Index("ix_todos_user_created", "user_id", "created_at"),
+    )
+```
+
+N+1 문제는 `selectinload`로 해결한다.
+
+```python
+# N+1 문제 — 각 Todo마다 별도 쿼리로 tags를 로드
+todos = await db.execute(select(Todo))
+for todo in todos.scalars():
+    print(todo.tags)  # 각 todo마다 SELECT 쿼리 발생!
+
+# 해결 — selectinload로 한 번에 로드
+from sqlalchemy.orm import selectinload
+
+result = await db.execute(
+    select(Todo).options(selectinload(Todo.tags))
+)
+```
+
+### 캐싱
+
+반복되는 무거운 연산 결과는 캐싱한다. Redis가 없는 간단한 환경에서는 `functools.lru_cache`나 in-memory dict로 시작한다.
+
+```python
+from functools import lru_cache
+from datetime import datetime, timedelta
+
+# 모델 로딩은 앱 시작 시 1회만 (섹션 ML 패턴 참고)
+@lru_cache(maxsize=1)
+def load_model():
+    import torch
+    return torch.load("model.pt")
+
+# API 응답 캐싱 (간단한 버전)
+_cache: dict[str, tuple[any, datetime]] = {}
+CACHE_TTL = timedelta(minutes=5)
+
+async def get_stats_cached(db: AsyncSession) -> dict:
+    key = "global_stats"
+    if key in _cache:
+        value, expires_at = _cache[key]
+        if datetime.utcnow() < expires_at:
+            return value
+
+    stats = await compute_stats(db)  # 무거운 집계 쿼리
+    _cache[key] = (stats, datetime.utcnow() + CACHE_TTL)
+    return stats
+```
+
+## 프론트엔드 성능
+
+### 번들 크기 최적화
+
+큰 라이브러리는 Tree Shaking과 dynamic import로 줄인다.
+
+```tsx
+// 나쁜 방법 — 전체 lodash 번들에 포함
+import _ from 'lodash'
+const result = _.debounce(fn, 300)
+
+// 좋은 방법 — 필요한 함수만 import
+import debounce from 'lodash/debounce'
+const result = debounce(fn, 300)
+```
+
+Vite에서 번들 분석으로 문제 라이브러리를 찾는다.
+
+```bash
+pnpm add -D rollup-plugin-visualizer
+# vite.config.ts에 추가 후 pnpm build
+# dist/stats.html 확인
+```
+
+### Lazy Loading
+
+라우트별로 컴포넌트를 동적으로 로드하면 초기 번들 크기를 줄인다.
+
+```tsx
+import { lazy, Suspense } from 'react'
+
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Settings = lazy(() => import('./pages/Settings'))
+
+function App() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <Routes>
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/settings" element={<Settings />} />
+      </Routes>
+    </Suspense>
+  )
+}
+```
+
+### CDN과 정적 파일 캐싱
+
+앞서 nginx 설정에서 다뤘듯이, Vite의 콘텐츠 해시 파일명을 이용해 정적 에셋을 최대 기간 캐싱한다.
+
+```nginx
+location /assets/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+이미지는 WebP 포맷과 `srcset`으로 디바이스별 최적 크기를 제공한다.
+
+## ML 모델 서빙 성능
+
+### lifespan으로 모델 1회 로딩
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+ml_model = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 앱 시작 시 1회 실행 — 모델 로딩
+    ml_model["classifier"] = load_model("model.pt")
+    ml_model["tokenizer"] = load_tokenizer("tokenizer/")
+    yield
+    # 앱 종료 시 정리
+    ml_model.clear()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/api/predict")
+async def predict(request: PredictRequest):
+    model = ml_model["classifier"]  # 이미 로드된 모델 재사용
+    return {"result": model.predict(request.text)}
+```
+
+요청마다 모델을 로드하면 수백 ms ~ 수 초가 낭비된다. lifespan 패턴으로 앱 시작 시 1회만 로드한다.
+
+### 배치 추론
+
+단일 요청을 기다리지 않고 짧은 시간 내 쌓인 요청을 묶어서 처리한다.
+
+```python
+import asyncio
+from collections import deque
+
+batch_queue: deque = deque()
+BATCH_SIZE = 32
+BATCH_TIMEOUT = 0.05  # 50ms
+
+async def process_batch():
+    while True:
+        await asyncio.sleep(BATCH_TIMEOUT)
+        if batch_queue:
+            batch = [batch_queue.popleft() for _ in range(min(BATCH_SIZE, len(batch_queue)))]
+            inputs = [item["input"] for item in batch]
+            results = model.predict_batch(inputs)  # 배치 추론
+            for item, result in zip(batch, results):
+                item["future"].set_result(result)
+
+@app.post("/api/predict")
+async def predict(request: PredictRequest):
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
+    batch_queue.append({"input": request.text, "future": future})
+    return {"result": await future}
+```
+
+GPU 배치 처리는 단일 처리 대비 처리량이 4~8배 증가한다.
+
+## 성능 목표 기준
+
+| 지표 | 목표 | 측정 방법 |
+|------|------|-----------|
+| API 응답 시간 (p99) | < 200ms (추론 제외) | FastAPI middleware |
+| ML 추론 시간 (p50) | 모델/하드웨어별 기준 | 추론 전후 타임스탬프 |
+| 프론트엔드 초기 번들 | < 500KB gzip | `pnpm build` 출력 |
+| Largest Contentful Paint | < 2.5s | Lighthouse |
+| DB 쿼리 시간 (p99) | < 50ms | SQLAlchemy 이벤트 훅 |
+
+## 핵심 정리
+
+- **백엔드** — async DB 드라이버 사용, 자주 조회하는 컬럼에 인덱스, 반복 연산은 캐싱으로 해결한다.
+- **프론트엔드** — 번들 분석으로 큰 라이브러리를 찾아 Tree Shaking하고, 라우트별 lazy load를 적용한다.
+- **ML 서빙** — lifespan으로 모델을 앱 시작 시 1회 로드하고, 배치 추론으로 GPU 처리량을 극대화한다.
+- 측정 없이 최적화하지 않는다. 먼저 병목을 찾고(프로파일링), 그다음 고친다.

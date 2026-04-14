@@ -1,0 +1,181 @@
+---
+title: "React의 핵심: 선언적 UI와 가상 DOM"
+description: React가 UI를 선언적으로 다루는 방식과 Virtual DOM의 동작 원리를 이해한다
+sidebar:
+  order: 1
+learning_objectives:
+  - "명령적 DOM 조작과 선언적 UI의 차이를 설명한다"
+  - "Virtual DOM이 실제 DOM 업데이트를 최소화하는 방식을 이해한다"
+  - "JSX가 JavaScript로 변환되는 과정을 파악한다"
+prerequisites:
+  - "HTML/CSS 기본 이해"
+  - "JavaScript 기초 (ES6+)"
+estimated_minutes: 20
+references:
+  - title: "React 공식 문서 - Describing the UI"
+    url: "https://react.dev/learn/describing-the-ui"
+    accessed: "2026-04-14"
+  - title: "React 공식 문서 - Rendering"
+    url: "https://react.dev/learn/render-and-commit"
+    accessed: "2026-04-14"
+---
+
+AI 엔지니어가 웹 프론트엔드를 처음 접할 때 가장 먼저 만나는 것이 React다. React가 왜 생겼는지, 그 핵심 아이디어가 무엇인지를 이해하면 이후 Next.js, Server Components 같은 개념도 자연스럽게 따라온다.
+
+## 명령적 vs 선언적
+
+React 이전, jQuery 시대의 코드를 보자.
+
+```javascript
+// 명령적(Imperative): "어떻게" 해야 하는지 하나하나 지시
+const btn = document.getElementById('like-btn')
+const counter = document.getElementById('count')
+let count = 0
+
+btn.addEventListener('click', () => {
+  count += 1
+  counter.textContent = count  // DOM을 직접 변경
+  if (count > 10) {
+    btn.style.color = 'red'    // 상태에 따라 또 DOM 변경
+  }
+})
+```
+
+상태(`count`)가 여러 DOM 요소에 흩어지고, 모든 변화를 개발자가 직접 추적해야 한다. 앱이 커질수록 "어느 상태가 어느 DOM에 반영되어 있는가"를 파악하기 어려워진다.
+
+React의 접근은 다르다.
+
+```tsx
+// 선언적(Declarative): "무엇이어야 하는지"를 기술
+import { useState } from 'react'
+
+function LikeButton() {
+  const [count, setCount] = useState(0)
+
+  return (
+    <button
+      style={{ color: count > 10 ? 'red' : 'black' }}
+      onClick={() => setCount(count + 1)}
+    >
+      좋아요 {count}
+    </button>
+  )
+}
+```
+
+상태(`count`)가 UI의 유일한 진실 공급원(single source of truth)이다. 상태가 바뀌면 React가 알아서 UI를 다시 그린다. 개발자는 "count가 이 값일 때 UI는 이렇게 생겨야 한다"만 선언하면 된다.
+
+## Virtual DOM
+
+선언적 UI의 문제: 상태가 바뀔 때마다 화면 전체를 다시 그리면 느리지 않을까?
+
+실제 DOM 조작은 비싸다. 레이아웃 재계산, 페인팅이 일어나기 때문이다. React는 이 문제를 **Virtual DOM** 으로 해결한다.
+
+```text
+상태 변경 발생
+       │
+       ▼
+새 Virtual DOM 트리 생성 (순수 JavaScript 객체)
+       │
+       ▼
+이전 Virtual DOM과 비교 (Diffing/Reconciliation)
+       │
+       ▼
+변경된 부분만 실제 DOM에 적용 (Patching)
+```
+
+Virtual DOM은 실제 DOM의 가벼운 JavaScript 표현이다. 메모리 안에서 새 트리와 이전 트리를 비교(diff)해서, 달라진 노드만 실제 DOM에 반영한다. 전체를 다시 그리지 않고 최소한의 DOM 조작만 수행한다.
+
+### Diffing 규칙
+
+React의 diff 알고리즘은 두 가지 핵심 가정을 기반으로 O(n) 성능을 달성한다.
+
+| 가정 | 설명 |
+|------|------|
+| 타입이 다른 요소 | 서브트리 전체를 교체 |
+| 같은 타입 요소 | 속성만 업데이트 |
+| 리스트 `key` | key가 같으면 재사용, 다르면 교체 |
+
+리스트 렌더링 시 `key`가 중요한 이유가 여기 있다.
+
+```tsx
+// key 없으면 전체 재렌더링 위험
+{items.map(item => <li key={item.id}>{item.name}</li>)}
+```
+
+## JSX
+
+JSX는 JavaScript 안에 HTML처럼 생긴 문법을 쓸 수 있게 해주는 문법 확장이다. 브라우저가 직접 이해하지 못하므로 Babel/SWC가 변환한다.
+
+```tsx
+// 개발자가 작성하는 JSX
+const element = <h1 className="title">안녕하세요</h1>
+
+// 빌드 도구가 변환하는 결과 (React 17+ 기준)
+import { jsx as _jsx } from 'react/jsx-runtime'
+const element = _jsx('h1', { className: 'title', children: '안녕하세요' })
+```
+
+JSX는 결국 함수 호출이다. `React.createElement(type, props, children)` 를 반환하며, 이것이 Virtual DOM 노드가 된다.
+
+### JSX 규칙 요약
+
+```tsx
+// 1. 최상위 요소는 하나 (또는 Fragment)
+return (
+  <>
+    <h1>제목</h1>
+    <p>내용</p>
+  </>
+)
+
+// 2. JavaScript 표현식은 중괄호로
+const name = 'Claude'
+return <p>안녕, {name}!</p>
+
+// 3. class → className, for → htmlFor
+return <label htmlFor="email" className="label">이메일</label>
+
+// 4. 셀프 클로징 태그 필수
+return <img src="logo.png" />
+```
+
+## 간단한 카운터 예제
+
+React의 핵심 개념을 하나의 컴포넌트로 확인한다.
+
+```tsx
+import { useState } from 'react'
+
+function Counter() {
+  // 상태 선언: [현재값, 변경 함수]
+  const [count, setCount] = useState(0)
+
+  // 상태를 직접 변경하지 않고 setter 사용 (불변성)
+  const increment = () => setCount(count + 1)
+  const decrement = () => setCount(count - 1)
+  const reset = () => setCount(0)
+
+  return (
+    <div>
+      <h2>카운터: {count}</h2>
+      <button onClick={decrement}>-</button>
+      <button onClick={reset}>초기화</button>
+      <button onClick={increment}>+</button>
+      {count > 5 && <p style={{ color: 'red' }}>5를 초과했습니다!</p>}
+    </div>
+  )
+}
+
+export default Counter
+```
+
+`count`가 바뀌면 React는 새 Virtual DOM을 만들고, 이전 것과 비교해서 변경된 텍스트 노드와 조건부 `<p>` 요소만 실제 DOM에 반영한다.
+
+## 핵심 정리
+
+- **선언적 UI** 는 "어떤 상태일 때 UI가 어떻게 보여야 하는가"를 기술한다 — DOM 조작을 직접 하지 않는다
+- **Virtual DOM** 은 변경된 부분만 실제 DOM에 반영해 성능을 확보한다 — 매번 전체를 다시 그리지 않는다
+- **JSX** 는 `React.createElement` 함수 호출로 변환된다 — 브라우저가 아닌 빌드 도구가 처리한다
+- **상태(state)는 불변** 으로 다뤄야 한다 — 직접 변경하지 않고 setter 함수를 통해 교체한다
+- **key** 는 리스트 diff의 성능을 결정한다 — 인덱스 대신 고유 ID를 사용한다

@@ -1,0 +1,175 @@
+---
+title: "gRPC와 HTTP/2: 내부 서비스 간 통신"
+description: Protobuf 직렬화와 HTTP/2 멀티플렉싱을 기반으로 하는 gRPC의 동작 원리와 ML 서비스에서의 활용을 이해한다.
+sidebar:
+  order: 4
+learning_objectives:
+  - "HTTP/2 멀티플렉싱이 HTTP/1.1 HOL 블로킹 문제를 해결하는 방식을 설명할 수 있다"
+  - "gRPC의 4가지 RPC 유형과 각 사용 시나리오를 구분할 수 있다"
+  - "ML 추론 서비스(vLLM, TGI)가 gRPC를 내부 통신에 사용하는 이유를 이해한다"
+prerequisites:
+  - "HTTP/1.1 요청/응답 기본 이해"
+  - "직렬화 포맷(JSON vs 바이너리)에 대한 기본 개념"
+estimated_minutes: 22
+references:
+  - title: "gRPC — Core concepts, architecture and lifecycle"
+    url: "https://grpc.io/docs/what-is-grpc/core-concepts/"
+    accessed: "2026-04-14"
+  - title: "RFC 7540 — Hypertext Transfer Protocol Version 2 (HTTP/2)"
+    url: "https://datatracker.ietf.org/doc/html/rfc7540"
+    accessed: "2026-04-14"
+  - title: "Protocol Buffers — Language Guide (proto3)"
+    url: "https://protobuf.dev/programming-guides/proto3/"
+    accessed: "2026-04-14"
+---
+
+ML 서비스를 운영하다 보면 vLLM, Text Generation Inference(TGI), Triton Inference Server 같은 추론 엔진과 통신해야 한다. 이 엔진들은 내부 API로 REST가 아닌 gRPC를 제공하는 경우가 많다. gRPC는 Google이 설계한 RPC 프레임워크로, **Protocol Buffers**로 메시지를 직렬화하고 **HTTP/2**로 전송한다.
+
+## HTTP/2가 HTTP/1.1을 개선한 방식
+
+### HOL 블로킹 문제
+
+HTTP/1.1에서는 하나의 TCP 연결로 요청을 순서대로 처리한다. 앞 요청이 느리면 뒤 요청이 기다려야 한다(Head-Of-Line 블로킹). 이를 우회하기 위해 브라우저는 도메인당 6개까지 병렬 TCP 연결을 열었다.
+
+```text
+HTTP/1.1 (연결 6개)          HTTP/2 (연결 1개)
+연결1: [요청A ─────────────]   스트림1: [요청A ──]
+연결2: [요청B ──]             스트림2: [요청B ──]
+연결3: [요청C ───────]        스트림3: [요청C ───]
+연결4: [요청D ─]              스트림4: [요청D ─]
+연결5: [요청E ─────]          스트림5: [요청E ─────]
+연결6: [요청F ──────────]     스트림6: [요청F ──────]
+```
+
+HTTP/2는 단일 TCP 연결 위에 **스트림**이라는 논리 채널을 여러 개 열어 요청을 동시에 처리한다. 연결 설정(TLS 핸드셰이크 포함) 비용이 한 번으로 줄어든다.
+
+### 주요 개선점 요약
+
+| 기능 | HTTP/1.1 | HTTP/2 |
+|------|----------|--------|
+| 멀티플렉싱 | 없음 | 단일 연결에 다중 스트림 |
+| 헤더 압축 | 없음 | HPACK 압축 |
+| 서버 푸시 | 없음 | 지원 (gRPC는 미사용) |
+| 바이너리 프레이밍 | 텍스트 | 바이너리 |
+| 스트림 우선순위 | 없음 | 지원 |
+
+## Protocol Buffers
+
+gRPC 메시지는 JSON 대신 Protobuf로 직렬화된다. `.proto` 파일로 스키마를 정의하고, 코드 생성 도구로 각 언어의 클래스를 만든다.
+
+```protobuf
+// inference.proto
+syntax = "proto3";
+
+package inference;
+
+service TextGeneration {
+  rpc Generate (GenerateRequest) returns (GenerateResponse);
+  rpc GenerateStream (GenerateRequest) returns (stream TokenResponse);
+}
+
+message GenerateRequest {
+  string prompt = 1;
+  int32 max_tokens = 2;
+  float temperature = 3;
+}
+
+message GenerateResponse {
+  string text = 1;
+  int32 tokens_generated = 2;
+}
+
+message TokenResponse {
+  string token = 1;
+  bool is_last = 2;
+}
+```
+
+Protobuf 직렬화는 JSON 대비 크기가 3~10배 작고 파싱 속도가 빠르다. 내부 서비스 간 대량 트래픽에서 이 차이가 의미 있다.
+
+## gRPC의 4가지 RPC 유형
+
+### 1. Unary RPC (단순 요청/응답)
+
+```text
+클라이언트                    서버
+    |---- GenerateRequest ---->|
+    |<--- GenerateResponse ----|
+```
+
+일반 함수 호출과 동일. 추론 결과 전체를 한 번에 받을 때 사용한다.
+
+### 2. Server Streaming RPC (서버 스트리밍)
+
+```text
+클라이언트                    서버
+    |---- GenerateRequest ---->|
+    |<--- TokenResponse[0] ----|
+    |<--- TokenResponse[1] ----|
+    |<--- TokenResponse[n] ----|
+    |<--- (스트림 종료) --------|
+```
+
+LLM 토큰 스트리밍에 직접 대응된다. vLLM의 내부 API가 이 방식을 사용한다.
+
+### 3. Client Streaming RPC (클라이언트 스트리밍)
+
+```text
+클라이언트                    서버
+    |---- AudioChunk[0] ------>|
+    |---- AudioChunk[1] ------>|
+    |---- AudioChunk[n] ------>|
+    |<--- TranscriptResponse --|
+```
+
+실시간 음성 전사(STT)에서 오디오 청크를 스트림으로 전송하고 최종 결과를 받을 때 사용한다.
+
+### 4. Bidirectional Streaming RPC (양방향 스트리밍)
+
+```text
+클라이언트                    서버
+    |---- AudioChunk --------->|
+    |<--- PartialTranscript ---|
+    |---- AudioChunk --------->|
+    |<--- PartialTranscript ---|
+```
+
+실시간 양방향 통신. 실시간 음성 대화 AI에서 활용된다.
+
+## ML 서비스에서 gRPC를 사용하는 이유
+
+```text
+외부 API (클라이언트 facing)     내부 서비스 (서버 간)
+─────────────────────────────   ──────────────────────
+REST + JSON + SSE               gRPC + Protobuf
+(브라우저/SDK 친화적)            (성능, 타입 안전성)
+
+예시:
+nginx → FastAPI (REST/SSE) → vLLM gRPC 서버
+                           → Triton Inference Server (gRPC)
+                           → 임베딩 서버 (gRPC)
+```
+
+vLLM은 `--enable-grpc` 옵션으로 gRPC 엔드포인트를 제공하며, NVIDIA Triton은 gRPC를 기본 프로토콜로 사용한다. 배치 추론, 스트리밍 생성, 모델 메타데이터 조회 모두 gRPC로 처리한다.
+
+## 브라우저에서 gRPC를 쓸 수 없는 이유
+
+브라우저는 HTTP/2 프레임을 직접 제어할 수 없어 gRPC를 직접 호출하지 못한다. 이를 해결하는 방법이 **gRPC-Web**으로, Envoy 프록시가 gRPC-Web 요청을 gRPC로 변환한다.
+
+```text
+브라우저                    Envoy 프록시              gRPC 서버
+  |--- gRPC-Web 요청 ------->|                          |
+  |                          |--- gRPC (HTTP/2) ------->|
+  |                          |<-- gRPC 응답 ------------|
+  |<-- gRPC-Web 응답 ---------|
+```
+
+AI 서비스 프론트엔드에서 직접 추론 서버를 호출할 필요는 드물다. 일반적으로 FastAPI 같은 미들웨어가 브라우저의 REST/SSE 요청을 받아 내부 gRPC 서버로 전달한다.
+
+## 핵심 정리
+
+- HTTP/2는 단일 TCP 연결에서 멀티플렉싱으로 HOL 블로킹을 해결한다
+- gRPC는 Protobuf 직렬화 + HTTP/2 전송으로 REST/JSON 대비 성능이 뛰어나다
+- 4가지 RPC 유형 중 Server Streaming이 LLM 토큰 스트리밍과 직접 대응된다
+- vLLM, Triton 등 ML 추론 엔진은 내부 API로 gRPC를 사용한다
+- 브라우저는 gRPC를 직접 호출할 수 없어 Envoy gRPC-Web 또는 REST 미들웨어를 사용한다

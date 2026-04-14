@@ -1,0 +1,155 @@
+---
+title: "SPA(Single Page Application)의 탄생과 원리"
+description: Gmail의 충격, history.pushState API, 클라이언트 사이드 라우팅의 등장. SPA가 무엇이며 왜 만들어졌는지, 그리고 어떤 트레이드오프를 가지는지 이해한다.
+sidebar:
+  order: 4
+learning_objectives:
+  - "SPA의 핵심 아키텍처를 설명할 수 있다: 정적 HTML 셸 + JS 번들 + API 호출"
+  - "history.pushState API를 사용한 클라이언트 사이드 라우팅의 동작 원리를 이해한다"
+  - "SPA의 장단점을 MPA와 비교해 설명할 수 있다"
+prerequisites:
+  - "05-03 AJAX, Fetch API, 비동기 통신"
+  - "JavaScript 기초"
+estimated_minutes: 18
+references:
+  - title: "MDN - History API"
+    url: "https://developer.mozilla.org/ko/docs/Web/API/History_API"
+    accessed: "2026-04-14"
+  - title: "React Router 공식 문서"
+    url: "https://reactrouter.com/en/main"
+    accessed: "2026-04-14"
+---
+
+## 2004년 Gmail의 충격
+
+2004년 4월, Google이 Gmail을 공개했다. 당시 웹메일은 Hotmail이나 Yahoo Mail처럼 링크를 클릭할 때마다 페이지 전체가 다시 로드됐다. Gmail은 달랐다.
+
+- 이메일을 클릭해도 화면이 깜빡이지 않는다
+- 답장을 작성하면서 다른 이메일 목록을 탐색할 수 있다
+- URL이 변경되지 않아도 콘텐츠가 바뀐다
+
+기술 커뮤니티는 충격을 받았다. "웹도 데스크톱 앱처럼 동작할 수 있다." 이것이 SPA 시대의 시작이었다.
+
+## SPA의 핵심 아이디어
+
+SPA의 핵심은 간단하다. **페이지 전환 없이 JavaScript가 DOM을 직접 조작해 화면을 바꾼다.**
+
+```text
+MPA 방식:
+  URL 변경 → 서버 요청 → 서버가 HTML 생성 → 브라우저 전체 렌더링 (깜빡임)
+
+SPA 방식:
+  URL 변경 → JavaScript가 감지 → API에서 데이터만 가져옴 → DOM 일부만 업데이트
+```
+
+초기 로딩 시 빈 HTML 셸과 JavaScript 번들을 받고, 이후 모든 화면 전환은 JavaScript가 처리한다.
+
+```html
+<!-- SPA의 index.html — 서버에서 받는 건 이게 전부 -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>My App</title>
+  </head>
+  <body>
+    <div id="root"></div>  <!-- JavaScript가 여기에 모든 것을 그린다 -->
+    <script src="/bundle.js"></script>  <!-- 앱 전체 로직이 들어있는 번들 -->
+  </body>
+</html>
+```
+
+## 클라이언트 사이드 라우팅: history.pushState
+
+SPA에서 URL이 바뀌어도 서버 요청이 없으려면, 브라우저 URL을 "가짜로" 바꾸는 방법이 필요하다. HTML5의 `history.pushState` API가 이것을 가능하게 한다.
+
+```javascript
+// 서버 요청 없이 URL을 변경
+history.pushState({ page: "about" }, "About", "/about")
+// 브라우저 주소창이 /about 으로 바뀌지만 페이지 새로고침 없음
+
+// 뒤로가기 버튼 처리
+window.addEventListener("popstate", (event) => {
+  const path = window.location.pathname
+  renderPage(path) // JavaScript가 해당 경로의 컴포넌트를 렌더링
+})
+```
+
+React Router, Vue Router 등 모든 클라이언트 사이드 라우터가 내부적으로 이 API를 사용한다.
+
+```jsx
+// React Router 사용 예시
+import { BrowserRouter, Route, Routes, Link } from "react-router-dom"
+
+function App() {
+  return (
+    <BrowserRouter>
+      <nav>
+        <Link to="/">홈</Link>
+        <Link to="/about">소개</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/about" element={<About />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+```
+
+링크를 클릭해도 서버 요청이 없다. JavaScript가 URL을 바꾸고 해당 컴포넌트를 렌더링한다.
+
+## SPA 아키텍처 전체 그림
+
+```text
+┌─────────────────────────────────────────────────────┐
+│                    브라우저                          │
+│                                                     │
+│  초기 로딩 (최초 1회만)                              │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  index.html (빈 셸)  +  bundle.js (앱 전체)  │   │
+│  └──────────────────────────────────────────────┘   │
+│                                                     │
+│  이후 화면 전환 (서버 요청 없음)                     │
+│  ┌─────────────┐   API 호출   ┌───────────────────┐ │
+│  │  JavaScript │ ──────────> │  백엔드 API 서버  │ │
+│  │  (라우팅,   │ <────JSON── │  (FastAPI 등)     │ │
+│  │   렌더링)   │             └───────────────────┘ │
+│  └─────────────┘                                   │
+└─────────────────────────────────────────────────────┘
+
+CDN에서 정적 파일 서빙 (index.html, bundle.js, CSS, 이미지)
+별도의 API 서버에서 데이터 제공
+```
+
+백엔드와 프론트엔드가 완전히 분리된다. 프론트엔드는 정적 파일 서버(CDN)에서, API는 별도 서버에서 제공한다.
+
+## SPA의 장점
+
+| 장점 | 설명 |
+|------|------|
+| 앱 수준의 UX | 화면 전환 시 깜빡임 없음, 네이티브 앱 느낌 |
+| 서버 부하 감소 | 서버는 API 응답만 처리, HTML 렌더링 없음 |
+| 프론트/백 분리 | 팀 분리, 독립 배포 가능 |
+| 오프라인 지원 | Service Worker로 캐싱 가능 |
+| 풍부한 인터랙션 | 드래그&드롭, 실시간 업데이트, 애니메이션 |
+
+## SPA의 단점
+
+| 단점 | 설명 |
+|------|------|
+| 초기 로딩 느림 | 첫 방문 시 전체 JS 번들 다운로드 필요 |
+| SEO 불리 | 초기 HTML이 비어있어 검색엔진 크롤러가 콘텐츠 인식 어려움 |
+| JavaScript 필수 | JS를 끄면 앱 전체가 동작하지 않음 |
+| 복잡한 상태 관리 | 클라이언트에서 모든 앱 상태를 관리해야 함 |
+| 번들 크기 문제 | 앱이 커질수록 초기 로딩 파일이 수 MB에 달할 수 있음 |
+
+특히 SEO 문제가 심각했다. 2010년대 초반 구글 봇은 JavaScript를 실행하지 않았다. 검색엔진이 SPA 사이트를 방문하면 빈 `<div id="root"></div>` 만 보이므로 색인이 제대로 되지 않았다.
+
+이 문제가 이후 SSR(Server Side Rendering)의 필요성으로 이어진다.
+
+## 핵심 정리
+
+- SPA는 최초 로딩 시 정적 HTML 셸과 JavaScript 번들을 받고, 이후 모든 화면 전환을 클라이언트 측 JavaScript로 처리하는 아키텍처다
+- `history.pushState` API를 통해 서버 요청 없이 URL을 변경하고, JavaScript가 해당 화면을 렌더링한다
+- 앱 수준의 UX와 프론트/백엔드 분리라는 장점이 있지만, 초기 로딩 성능과 SEO에 취약점이 있다
+- 이 단점들을 극복하기 위해 SSR과 Next.js가 등장했다

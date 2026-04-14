@@ -1,0 +1,200 @@
+---
+title: "SQLite: 임베디드 DB의 쓰임새"
+description: SQLite의 단일 파일·제로 설정 특성, 프로토타이핑 용도, 동시 쓰기 한계, WAL 모드를 이해한다
+sidebar:
+  order: 1
+learning_objectives:
+  - "SQLite의 특성과 다른 DB와의 차이를 설명한다"
+  - "SQLite가 적합한 유스케이스와 부적합한 유스케이스를 구분한다"
+  - "WAL 모드로 동시성을 개선하는 방법을 안다"
+prerequisites:
+  - "SQL 기초 (SELECT, INSERT, UPDATE, DELETE)"
+  - "파일 시스템 기본 이해"
+estimated_minutes: 20
+references:
+  - title: "SQLite 공식 문서"
+    url: "https://www.sqlite.org/docs.html"
+    accessed: "2026-04-14"
+  - title: "SQLite WAL 모드"
+    url: "https://www.sqlite.org/wal.html"
+    accessed: "2026-04-14"
+---
+
+ML 프로젝트를 시작할 때 PostgreSQL을 설치하고 설정하는 것은 번거롭다. SQLite는 파일 하나가 곧 데이터베이스다. 설치가 필요 없고, Python에 기본 내장되어 있다.
+
+## SQLite란
+
+SQLite는 **서버가 없는(serverless) 임베디드 관계형 데이터베이스**다. 별도 프로세스 없이 애플리케이션 프로세스 안에서 직접 DB 파일을 읽고 쓴다.
+
+```text
+PostgreSQL 구조:              SQLite 구조:
+
+애플리케이션                  애플리케이션
+    │  SQL 쿼리                   │
+    ▼                             │ (직접 파일 I/O)
+postgres 프로세스                 ▼
+    │                        myapp.db (단일 파일)
+    ▼
+데이터 파일들
+```
+
+```python
+import sqlite3
+
+# 파일이 없으면 자동 생성
+conn = sqlite3.connect("myapp.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        accuracy REAL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+""")
+
+cursor.execute(
+    "INSERT INTO experiments (name, accuracy) VALUES (?, ?)",
+    ("bert-base-v1", 0.923)
+)
+conn.commit()
+conn.close()
+```
+
+## 언제 SQLite를 쓰는가
+
+### 적합한 유스케이스
+
+```text
+1. 프로토타이핑 / 개발 초기
+   - 서버 설정 없이 즉시 시작
+   - .db 파일 하나로 데이터 공유 가능
+
+2. ML 실험 추적
+   - 로컬에서 실험 메타데이터 저장
+   - 단일 사용자, 단일 프로세스
+
+3. 임베디드 기기 / 엣지 AI
+   - 라즈베리파이, Jetson 등 리소스 제한 환경
+   - 네트워크 없이 로컬 추론 결과 저장
+
+4. 캐시 / 큐
+   - 웹 크롤링 결과, API 응답 캐시
+   - 단순 작업 큐
+
+5. 테스트 환경
+   - CI/CD에서 메모리 DB(:memory:)로 빠른 테스트
+```
+
+```python
+# 테스트용 인메모리 DB
+conn = sqlite3.connect(":memory:")
+```
+
+### 부적합한 유스케이스
+
+```text
+1. 높은 동시 쓰기
+   - 여러 워커가 동시에 쓰면 "database is locked" 에러
+   - 기본 모드: 파일 전체에 쓰기 잠금 (WAL로 개선 가능)
+
+2. 대규모 데이터
+   - 수백 GB 이상이면 PostgreSQL이 더 효율적
+   - 복잡한 쿼리 최적화 기능 부족
+
+3. 네트워크 공유
+   - NFS 등 네트워크 파일 시스템에서 불안정
+   - 여러 서버가 같은 DB에 접근 불가
+
+4. 엔터프라이즈 기능
+   - 사용자 권한 관리 없음
+   - 복제(Replication) 기본 미지원
+```
+
+## WAL 모드
+
+기본 SQLite는 쓰기 시 파일 전체를 잠근다(exclusive lock). 읽기도 막힌다.
+
+**WAL(Write-Ahead Logging) 모드**를 사용하면 읽기와 쓰기가 동시에 가능하다.
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("myapp.db")
+
+# WAL 모드 활성화 (연결할 때마다 설정)
+conn.execute("PRAGMA journal_mode=WAL")
+
+# 추가 성능 설정
+conn.execute("PRAGMA synchronous=NORMAL")   # 기본값 FULL보다 빠름 (안전성 약간 감소)
+conn.execute("PRAGMA cache_size=10000")     # 캐시 크기 (페이지 수)
+conn.execute("PRAGMA temp_store=MEMORY")   # 임시 데이터 메모리에 저장
+```
+
+WAL 모드의 동작:
+
+```text
+기본 모드 (Journal):
+  쓰기 시 → 파일 전체 잠금 → 읽기 불가
+
+WAL 모드:
+  쓰기 → WAL 파일에 먼저 기록
+  읽기 → 원본 파일 + WAL 체크포인트로 일관된 뷰 제공
+  → 읽기/쓰기 동시 가능 (단, 쓰기는 여전히 직렬화)
+```
+
+WAL 모드에서도 **쓰기는 직렬화된다.** 동시 쓰기 워커가 많다면 SQLite 한계다. 이 경우 PostgreSQL로 전환을 고려한다(08-04 참고).
+
+## FastAPI에서 SQLite 사용
+
+```python
+import sqlite3
+from contextlib import contextmanager
+from fastapi import FastAPI, Depends
+
+DATABASE_URL = "experiments.db"
+
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect(DATABASE_URL)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row  # 딕셔너리처럼 접근 가능
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+app = FastAPI()
+
+@app.post("/experiments")
+async def create_experiment(name: str, accuracy: float):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO experiments (name, accuracy) VALUES (?, ?)",
+            (name, accuracy)
+        )
+        return {"id": cursor.lastrowid, "name": name, "accuracy": accuracy}
+
+
+@app.get("/experiments")
+async def list_experiments():
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM experiments ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+```
+
+## 핵심 정리
+
+- **SQLite는 서버가 없는 단일 파일 DB다** — 설치 없이 Python 기본 내장으로 바로 사용 가능하다
+- **프로토타이핑, 로컬 실험 추적, 임베디드 환경에 최적이다** — 빠른 시작이 최우선일 때 선택한다
+- **동시 쓰기가 많으면 한계가 있다** — 기본 모드는 쓰기 시 전체 잠금이 발생한다
+- **WAL 모드로 읽기/쓰기 동시성을 개선한다** — `PRAGMA journal_mode=WAL` 한 줄로 활성화한다
+- **쓰기 직렬화는 WAL에서도 유지된다** — 높은 동시 쓰기가 필요하면 PostgreSQL 전환을 고려한다

@@ -1,0 +1,207 @@
+---
+title: "프로젝트 스캐폴딩과 개발 환경"
+description: Python 가상환경, Node, pnpm을 설정하고 백엔드·프론트엔드 프로젝트 골격을 만든다.
+sidebar:
+  order: 2
+learning_objectives:
+  - "Python venv와 Node 환경을 독립적으로 구성할 수 있다"
+  - "FastAPI 프로젝트와 React(Vite) 프로젝트를 초기화할 수 있다"
+  - ".gitignore와 .env.example로 비밀값을 안전하게 관리한다"
+prerequisites:
+  - "Python 3.11+ 설치"
+  - "Node 20+ 및 pnpm 설치"
+  - "git 기초"
+estimated_minutes: 25
+references:
+  - title: "Vite 시작하기"
+    url: "https://vitejs.dev/guide/"
+    accessed: "2026-04-14"
+  - title: "FastAPI 설치"
+    url: "https://fastapi.tiangolo.com/#installation"
+    accessed: "2026-04-14"
+---
+
+앱을 만들기 전에 두 개의 독립적인 프로젝트 — 백엔드(Python)와 프론트엔드(Node) — 를 하나의 저장소에 구성한다.
+
+## 필요한 도구 확인
+
+```bash
+python --version   # 3.11 이상
+node --version     # 20 이상
+pnpm --version     # 8 이상
+git --version
+```
+
+pnpm이 없으면 설치한다.
+
+```bash
+npm install -g pnpm
+```
+
+## 루트 디렉토리 생성
+
+```bash
+mkdir ai-summary-todo
+cd ai-summary-todo
+git init
+```
+
+## 백엔드 스캐폴딩
+
+### 가상환경과 패키지 설치
+
+```bash
+mkdir backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+pip install fastapi uvicorn sqlalchemy pydantic
+pip freeze > requirements.txt
+```
+
+`requirements.txt` 내용 예시.
+
+```text
+fastapi==0.115.0
+uvicorn==0.30.6
+sqlalchemy==2.0.35
+pydantic==2.9.2
+```
+
+### 패키지 디렉토리 구조 초기화
+
+```bash
+mkdir -p app
+touch app/__init__.py
+touch app/main.py app/db.py app/models.py app/schemas.py app/routes.py app/summarizer.py
+cd ..
+```
+
+### 백엔드 동작 확인용 최소 main.py
+
+```python
+# backend/app/main.py (임시 확인용)
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+```
+
+```bash
+cd backend
+uvicorn app.main:app --reload --port 8000
+```
+
+브라우저에서 `http://localhost:8000/docs` 를 열면 Swagger UI가 보여야 한다.
+
+## 프론트엔드 스캐폴딩
+
+```bash
+cd ..   # ai-summary-todo 루트로
+pnpm create vite frontend -- --template react-ts
+cd frontend
+pnpm install
+```
+
+### Vite 프록시 설정
+
+개발 중에는 Vite Dev Server가 `/api` 요청을 FastAPI로 포워딩하도록 설정한다. 이렇게 하면 CORS 없이 개발할 수 있다.
+
+```typescript
+// frontend/vite.config.ts
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+})
+```
+
+### 프론트엔드 동작 확인
+
+```bash
+pnpm dev
+```
+
+`http://localhost:5173` 에서 Vite 기본 화면이 나와야 한다.
+
+## 환경 변수 관리
+
+```bash
+# 루트에서
+touch .env.example .env
+```
+
+```text
+# .env.example
+DATABASE_URL=sqlite:///./app.db
+CORS_ORIGINS=http://localhost:5173
+```
+
+`.env` 는 실제 값을 채우고 절대 커밋하지 않는다.
+
+## .gitignore 구성
+
+```text
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/app.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# 환경 변수
+.env
+
+# IDE
+.DS_Store
+.vscode/settings.json
+```
+
+## 초기 커밋
+
+```bash
+cd ..   # ai-summary-todo 루트
+git add .gitignore .env.example backend/requirements.txt frontend/package.json frontend/vite.config.ts
+git commit -m "chore: project scaffolding — backend(FastAPI) + frontend(React+Vite)"
+```
+
+## 현재 상태 점검
+
+이 시점에서 두 프로세스를 동시에 띄울 수 있어야 한다.
+
+터미널 1 (백엔드):
+```bash
+cd backend && source .venv/bin/activate && uvicorn app.main:app --reload
+```
+
+터미널 2 (프론트엔드):
+```bash
+cd frontend && pnpm dev
+```
+
+| 확인 항목 | URL |
+|-----------|-----|
+| FastAPI Swagger | `http://localhost:8000/docs` |
+| React Dev Server | `http://localhost:5173` |
+| 헬스 체크 (프록시 경유) | `http://localhost:5173/api/health` |
+
+프록시가 올바르게 설정됐다면 `localhost:5173/api/health` 에서도 `{"status":"ok"}` 가 반환된다.
+
+다음 챕터에서 백엔드 전체 로직을 구현한다.

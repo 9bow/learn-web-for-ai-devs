@@ -1,0 +1,184 @@
+---
+title: "언제 SPA, 언제 Next.js? 의사결정 프레임"
+description: SEO 필요 여부, 사용자 유형, 데이터 특성에 따라 SPA(Vite+React)와 Next.js 중 올바른 선택을 내리는 프레임을 제공한다
+sidebar:
+  order: 5
+learning_objectives:
+  - "SEO, 초기 로딩, 인증 여부를 기준으로 렌더링 전략을 선택한다"
+  - "AI/ML 프로젝트 유형별 적합한 프론트엔드 스택을 고른다"
+  - "불필요한 복잡도를 피하고 적절한 도구를 선택한다"
+prerequisites:
+  - "SSR/SSG/ISR 개념 (06-03, 06-04)"
+  - "Next.js 기본 구조 (06-04)"
+estimated_minutes: 20
+references:
+  - title: "Vite 공식 문서"
+    url: "https://vitejs.dev/guide/"
+    accessed: "2026-04-14"
+  - title: "Next.js 공식 문서 - When to use Next.js"
+    url: "https://nextjs.org/docs/app/building-your-application/rendering/composition-patterns"
+    accessed: "2026-04-14"
+---
+
+Next.js는 강력하지만 모든 상황에 최선의 선택은 아니다. 오버엔지니어링은 팀의 생산성을 낮춘다. 프로젝트 특성에 맞는 스택을 선택하는 것이 중요하다.
+
+## 의사결정 트리
+
+```text
+시작
+  │
+  ├─ 검색 엔진 노출(SEO)이 필요한가?
+  │     │
+  │     ├─ YES → 외부 사용자가 구글로 찾아오는가?
+  │     │           ├─ YES → Next.js (SSR/SSG)
+  │     │           └─ NO  → 내부 도구라면 SEO 불필요
+  │     │
+  │     └─ NO (사내 도구, 로그인 필수 서비스)
+  │             │
+  │             ├─ 초기 로딩 속도가 중요한가?
+  │             │     ├─ YES → Next.js (SSR로 빠른 FCP)
+  │             │     └─ NO  → Vite + React (SPA) 충분
+  │             │
+  │             └─ 팀이 Node/Next.js에 익숙한가?
+  │                   ├─ YES → Next.js도 고려
+  │                   └─ NO  → Vite + React로 시작
+  │
+  └─ 실시간 인터랙션이 핵심인가? (에디터, 채팅, 캔버스)
+        └─ YES → Vite + React (CSR이 더 단순하고 유연)
+```
+
+## 프로젝트 유형별 권장 스택
+
+### Vite + React (SPA)가 적합한 경우
+
+**사내 관리 도구 / 대시보드**
+
+```text
+특성: 로그인 후에만 접근, SEO 불필요, 데이터가 동적
+예시: ML 실험 대시보드, 모델 모니터링, 어드민 패널
+이유: 로그인 후 콘텐츠이므로 SEO 의미 없음
+     Vite는 HMR이 빠르고 설정이 단순
+```
+
+**LLM 챗봇 프론트엔드**
+
+```text
+특성: 실시간 스트리밍, 세션 기반, SEO 불필요
+예시: 사내 AI 어시스턴트, Claude/GPT 래퍼 UI
+이유: 채팅 UI는 완전히 동적, 페이지 공유 불필요
+     SSR의 이점이 거의 없음
+```
+
+```tsx
+// Vite + React로 충분한 LLM 챗봇 예시
+function ChatApp() {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [streaming, setStreaming] = useState(false)
+
+  const sendMessage = async () => {
+    setStreaming(true)
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: input }),
+    })
+
+    const reader = response.body!.getReader()
+    // 스트리밍 처리...
+    setStreaming(false)
+  }
+
+  return <div>{/* 채팅 UI */}</div>
+}
+```
+
+**프로토타입 / 내부 실험 도구**
+
+```text
+특성: 빠른 이터레이션, 소규모 팀, 외부 노출 없음
+이유: Next.js의 SSR/ISR 학습 비용 없이 빠르게 시작
+```
+
+### Next.js가 적합한 경우
+
+**공개 서비스 / 마케팅 페이지**
+
+```text
+특성: 구글 검색으로 유입, 콘텐츠 중심
+예시: SaaS 랜딩 페이지, 기술 블로그, API 문서 사이트
+이유: SSG로 초고속 로딩 + 완벽한 SEO
+```
+
+**이커머스 / 상품 목록**
+
+```text
+특성: 상품 정보가 수시로 변경, SEO 필수
+이유: ISR로 주기적 재생성 + 검색 엔진 노출
+```
+
+**공개 AI 서비스**
+
+```text
+특성: 외부 사용자가 직접 접근, 마케팅 필요
+예시: AI 이미지 생성 서비스, 공개 챗봇 서비스
+이유: 랜딩 페이지·블로그는 Next.js SSG, 앱 자체는 CSR 혼용
+```
+
+## 스택 비교표
+
+| 항목 | Vite + React | Next.js |
+|------|-------------|---------|
+| 설정 복잡도 | 낮음 | 중간 |
+| SEO | 별도 설정 필요 | 기본 제공 |
+| 학습 곡선 | 낮음 | 중간 |
+| 번들 최적화 | 수동 | 자동 |
+| 서버 필요 | 정적 파일만 | Node 서버 |
+| API Routes | 없음 | 내장 |
+| Server Components | 없음 | 지원 |
+| 배포 간편성 | S3/CDN | Vercel/서버 필요 |
+
+## AI 엔지니어를 위한 현실적 가이드
+
+AI/ML 백엔드를 FastAPI로 개발하는 경우 프론트엔드 선택 기준:
+
+```text
+시나리오 1: 사내 ML 플랫폼 (실험 추적, 모델 레지스트리)
+  → Vite + React
+  이유: 인증 후 접근, SEO 불필요, 빠른 구축이 우선
+
+시나리오 2: 공개 AI 데모 / 포트폴리오
+  → Next.js
+  이유: 구글 검색 노출, 랜딩 페이지 필요
+
+시나리오 3: LLM 챗봇 (내부용)
+  → Vite + React
+  이유: 실시간 스트리밍, 세션 기반, SSR 이점 없음
+
+시나리오 4: AI 기반 SaaS (외부 공개)
+  → Next.js
+  이유: 마케팅 페이지 SEO + App Router로 혼합 전략
+
+시나리오 5: Jupyter 스타일 노트북 UI
+  → Vite + React
+  이유: 고인터랙티브, 실시간 실행, SSR 불필요
+```
+
+## 마이그레이션 전략
+
+SPA로 시작했다가 SEO가 필요해진 경우, 점진적 마이그레이션이 가능하다.
+
+```text
+1단계: 랜딩 페이지·블로그만 Next.js로 분리
+2단계: 앱 영역은 기존 SPA 유지 (서브도메인 또는 /app 경로)
+3단계: 트래픽·팀 역량에 따라 전면 이전 여부 결정
+```
+
+처음부터 "혹시 나중에 SEO가 필요할 수도 있으니" Next.js를 선택하는 것은 YAGNI(You Aren't Gonna Need It) 위반이다. 지금 필요한 것에 맞는 도구를 고른다.
+
+## 핵심 정리
+
+- **SEO가 필요 없으면 Vite + React로 시작한다** — 사내 도구, 로그인 필수 서비스, 챗봇 UI
+- **LLM 챗봇 프론트엔드는 SPA로 충분하다** — 실시간 스트리밍과 세션 기반 특성이 SSR과 맞지 않는다
+- **외부 공개 서비스라면 Next.js를 선택한다** — SEO, 초기 로딩, API Routes 내장
+- **복잡도를 과소평가하지 않는다** — Next.js는 Node 서버, App Router 개념, Hydration 이해가 필요하다
+- **지금 필요한 것에 맞는 도구를 고른다** — 미래를 위한 오버엔지니어링은 생산성을 낮춘다

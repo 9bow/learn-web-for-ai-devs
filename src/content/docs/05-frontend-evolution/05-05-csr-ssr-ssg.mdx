@@ -1,0 +1,176 @@
+---
+title: "CSR vs SSR vs SSG: 렌더링 전략 비교"
+description: Client-Side Rendering, Server-Side Rendering, Static Site Generation 세 가지 렌더링 전략의 동작 방식과 트레이드오프를 비교하고, 각각 언제 사용하는지 판단할 수 있다.
+sidebar:
+  order: 5
+learning_objectives:
+  - "CSR, SSR, SSG 각각의 동작 흐름을 설명할 수 있다"
+  - "초기 로딩 속도, SEO, 서버 비용, 인터랙티브 측면에서 세 전략을 비교할 수 있다"
+  - "프로젝트 요구사항에 따라 적절한 렌더링 전략을 선택할 수 있다"
+prerequisites:
+  - "05-04 SPA의 탄생과 원리"
+  - "HTTP 요청/응답 기초"
+estimated_minutes: 20
+references:
+  - title: "Next.js - Rendering"
+    url: "https://nextjs.org/docs/app/building-your-application/rendering"
+    accessed: "2026-04-14"
+  - title: "web.dev - Rendering on the Web"
+    url: "https://web.dev/articles/rendering-on-the-web"
+    accessed: "2026-04-14"
+---
+
+## 세 가지 렌더링 전략
+
+HTML을 언제, 어디서 생성하느냐에 따라 렌더링 전략이 달라진다. 이것이 현대 프론트엔드의 핵심 설계 결정이다.
+
+```text
+CSR: 브라우저에서 JavaScript가 HTML 생성
+SSR: 매 요청마다 서버에서 HTML 생성 후 전송
+SSG: 빌드 타임에 HTML 미리 생성, 정적 파일로 배포
+```
+
+## CSR (Client-Side Rendering)
+
+React의 기본 동작 방식이다. `create-react-app`, `Vite + React` 가 이 방식으로 동작한다.
+
+```text
+[브라우저]                          [CDN/정적 서버]
+    │                                     │
+    │── GET / ──────────────────────────>│
+    │<── 빈 HTML + bundle.js ────────────│
+    │                                     │
+    │  (JavaScript 파싱 및 실행)          │
+    │  (API 요청)                         │── GET /api/data ──> [API 서버]
+    │                                     │<── JSON ──────────
+    │  (DOM 생성 및 화면 렌더링)          │
+    │  ← 사용자가 화면을 볼 수 있음       │
+```
+
+**타임라인:**
+1. 서버에서 빈 HTML 수신 (빠름)
+2. JavaScript 번들 다운로드 (느릴 수 있음)
+3. JS 실행, API 호출
+4. 데이터 수신 후 화면 렌더링 (사용자가 콘텐츠를 봄)
+
+단계 1~4까지 사용자는 빈 화면 혹은 로딩 스피너를 본다. 이를 **FOUC(Flash of Unstyled Content)** 또는 **빈 화면 문제** 라고 한다.
+
+## SSR (Server-Side Rendering)
+
+Next.js의 핵심 기능이다. 요청이 올 때마다 서버에서 React 컴포넌트를 HTML로 렌더링해 응답한다.
+
+```text
+[브라우저]                    [Next.js 서버]           [DB/API]
+    │                              │                      │
+    │── GET /products ────────────>│                      │
+    │                              │── 데이터 조회 ──────>│
+    │                              │<── 데이터 ───────────│
+    │                              │  (React 컴포넌트를   │
+    │                              │   HTML로 렌더링)      │
+    │<── 완성된 HTML + JS ─────────│                      │
+    │  (즉시 콘텐츠 표시)          │                      │
+    │  (Hydration: JS로 인터랙티브화)                     │
+```
+
+**Hydration:** 서버에서 만든 정적 HTML에 JavaScript를 "주입"해 인터랙티브하게 만드는 과정. 버튼 클릭, 상태 변경 등이 이 이후에 동작한다.
+
+```tsx
+// Next.js App Router — 서버 컴포넌트 (기본값)
+// 이 코드는 서버에서 실행된다
+async function ProductList() {
+  const products = await fetch("https://api.example.com/products").then(
+    (r) => r.json()
+  )
+
+  return (
+    <ul>
+      {products.map((p) => (
+        <li key={p.id}>{p.name}</li>
+      ))}
+    </ul>
+  )
+}
+```
+
+서버에서 데이터를 가져와 HTML을 완성한 뒤 브라우저로 보낸다. 브라우저는 첫 응답에서 이미 콘텐츠가 채워진 HTML을 받는다.
+
+## SSG (Static Site Generation)
+
+빌드 타임에 모든 페이지를 미리 HTML로 생성한다. 요청 시점에 서버 연산이 없다.
+
+```text
+빌드 타임 (배포 전):
+  Next.js/Astro 등 → 모든 페이지 HTML 미리 생성 → CDN에 업로드
+
+요청 시점:
+  [브라우저] ── GET /blog/my-post ──> [CDN] ── 미리 만든 HTML 즉시 반환
+```
+
+```tsx
+// Next.js App Router — generateStaticParams로 정적 생성
+export async function generateStaticParams() {
+  const posts = await getPosts()
+  return posts.map((post) => ({ slug: post.slug }))
+}
+
+// 각 slug에 대한 HTML이 빌드 타임에 생성됨
+export default async function BlogPost({ params }) {
+  const post = await getPost(params.slug)
+  return <article>{post.content}</article>
+}
+```
+
+데이터가 거의 변하지 않는 블로그, 문서 사이트에 최적이다. CDN이 HTML을 바로 반환하므로 응답이 가장 빠르다.
+
+## 세 전략 비교
+
+| 항목 | CSR | SSR | SSG |
+|------|-----|-----|-----|
+| 초기 로딩 속도 | 느림 (JS 실행 후 렌더링) | 빠름 (HTML 즉시 표시) | 가장 빠름 (CDN 캐시) |
+| SEO | 취약 (초기 HTML 비어있음) | 우수 (완성된 HTML) | 우수 (완성된 HTML) |
+| 서버 비용 | 낮음 (정적 파일 서빙) | 높음 (매 요청마다 렌더링) | 매우 낮음 (CDN만) |
+| 인터랙티브 | 즉시 (JS 로드 후) | Hydration 후 | Hydration 후 |
+| 실시간 데이터 | 쉬움 (API 자유롭게 호출) | 가능 (매 요청 최신 데이터) | 어려움 (빌드 시점 데이터) |
+| 빌드 복잡도 | 낮음 | 중간 | 높음 (페이지 수에 비례) |
+
+## 각각 언제 쓰나
+
+**CSR을 선택할 때:**
+- 로그인 후 사용하는 내부 도구, 대시보드
+- SEO가 필요 없는 앱 (인증 후 진입)
+- 팀 규모가 작고 서버 인프라를 최소화하고 싶을 때
+- LLM 챗봇 프론트엔드, 데이터 분석 대시보드
+
+**SSR을 선택할 때:**
+- 검색 결과, 상품 목록처럼 SEO가 중요하고 데이터가 자주 바뀌는 페이지
+- 사용자별 개인화 콘텐츠 (로그인 상태, 추천 등)
+- 소셜 미디어 피드, 뉴스 사이트
+
+**SSG를 선택할 때:**
+- 블로그, 마케팅 랜딩 페이지, 문서 사이트
+- 콘텐츠가 자주 바뀌지 않음
+- 최대한 빠른 응답 속도가 필요
+- 이 학습 사이트처럼 Starlight/Astro 기반 문서
+
+## ISR: SSG의 실용적 타협점
+
+Next.js의 **Incremental Static Regeneration(ISR)** 은 SSG와 SSR의 중간이다. 정적으로 생성하되, 일정 시간이 지나면 백그라운드에서 재생성한다.
+
+```tsx
+// ISR — 60초마다 재생성
+export const revalidate = 60
+
+export default async function Page() {
+  const data = await fetch("https://api.example.com/data")
+  return <div>{data}</div>
+}
+```
+
+뉴스 사이트처럼 "빠른 응답은 필요하지만 데이터가 주기적으로 바뀌는" 경우에 적합하다.
+
+## 핵심 정리
+
+- CSR은 브라우저에서 JavaScript가 화면을 그리며, 초기 로딩이 느리고 SEO에 불리하다. 로그인 후 내부 도구에 적합하다
+- SSR은 매 요청마다 서버에서 HTML을 생성해 SEO와 초기 로딩이 좋지만 서버 비용이 높다. 콘텐츠가 자주 바뀌는 공개 페이지에 적합하다
+- SSG는 빌드 타임에 HTML을 미리 만들어 가장 빠르지만 실시간 데이터에 한계가 있다. 블로그, 문서 사이트에 최적이다
+- Next.js는 페이지별로 CSR/SSR/SSG/ISR을 혼합 사용할 수 있어 현실적인 절충이 가능하다

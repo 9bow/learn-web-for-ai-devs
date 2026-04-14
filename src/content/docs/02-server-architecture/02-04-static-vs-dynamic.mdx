@@ -1,0 +1,175 @@
+---
+title: 정적 vs 동적 콘텐츠, 그리고 리버스 프록시
+description: React 빌드 결과물(정적)과 FastAPI 응답(동적)의 차이를 이해하고, nginx location 블록으로 두 콘텐츠를 라우팅하는 방법을 배운다.
+sidebar:
+  order: 4
+learning_objectives:
+  - "정적 콘텐츠와 동적 콘텐츠의 차이를 구체적으로 설명할 수 있다"
+  - "리버스 프록시가 무엇이고 포워드 프록시와 어떻게 다른지 이해한다"
+  - "nginx location 블록으로 정적 파일과 API 요청을 분리 라우팅할 수 있다"
+prerequisites:
+  - "02-02 챕터 완료 (Web Server vs WAS)"
+  - "React 빌드 과정에 대한 기본 이해"
+estimated_minutes: 20
+references:
+  - title: "nginx — Beginner's Guide"
+    url: "https://nginx.org/en/docs/beginners_guide.html"
+    accessed: "2026-04-14"
+  - title: "nginx — ngx_http_proxy_module"
+    url: "https://nginx.org/en/docs/http/ngx_http_proxy_module.html"
+    accessed: "2026-04-14"
+  - title: "MDN Web Docs — Static vs Dynamic sites"
+    url: "https://developer.mozilla.org/en-US/docs/Learn/Server-side/First_steps/Client-Server_overview"
+    accessed: "2026-04-14"
+---
+
+## 정적 콘텐츠란 무엇인가
+
+정적(Static) 콘텐츠는 서버가 요청을 받기 전에 이미 완성된 파일입니다. 누가 요청해도, 언제 요청해도, 서버에 저장된 내용 그대로 반환합니다.
+
+```text
+[정적 콘텐츠 흐름]
+브라우저 → nginx → 디스크에서 파일 읽기 → 그대로 반환
+```
+
+React 앱을 `npm run build` 하면 `dist/` 또는 `build/` 디렉토리에 정적 파일이 생성됩니다.
+
+```bash
+npm run build
+
+# 결과물:
+dist/
+  index.html          ← 진입점 HTML
+  assets/
+    index-Bx3kL9aP.js  ← 번들링된 JavaScript
+    index-Ct2mR8wQ.css  ← 번들링된 CSS
+    logo-Dq7nM3xE.svg   ← 이미지 에셋
+```
+
+이 파일들은 내용이 고정되어 있습니다. nginx는 요청이 오면 파일 시스템에서 해당 파일을 찾아 그대로 전송합니다. Python 코드나 데이터베이스 쿼리가 전혀 필요 없습니다.
+
+## 동적 콘텐츠란 무엇인가
+
+동적(Dynamic) 콘텐츠는 요청이 들어올 때마다 서버 코드가 실행되어 응답을 생성합니다. 사용자, 시간, 입력값에 따라 내용이 달라집니다.
+
+```text
+[동적 콘텐츠 흐름]
+브라우저 → FastAPI → (DB 조회 + 비즈니스 로직 + 모델 추론) → JSON 생성 → 반환
+```
+
+FastAPI 엔드포인트가 전형적인 동적 콘텐츠 생성기입니다.
+
+```python
+@app.post("/api/chat")
+async def chat(request: ChatRequest, db: AsyncSession = Depends(get_async_db)):
+    # 매 요청마다 실행되는 로직
+    history = await db.execute(
+        select(Message).where(Message.session_id == request.session_id)
+    )
+    response = await model.generate(request.message, history.scalars().all())
+    return {"reply": response}
+```
+
+같은 엔드포인트라도 `session_id`가 다르면 다른 응답이 나옵니다. 디스크에 미리 저장할 수 없습니다.
+
+## 정적 vs 동적 비교
+
+| 항목 | 정적 콘텐츠 | 동적 콘텐츠 |
+|------|------------|------------|
+| 생성 시점 | 빌드 타임 | 요청 타임 |
+| 서버 연산 | 없음 (파일 I/O만) | 있음 (코드 실행) |
+| 응답 속도 | 매우 빠름 | 상대적으로 느림 |
+| 캐싱 | 쉬움 (내용 불변) | 복잡 (사용자별 다름) |
+| 예시 | HTML, JS, CSS, 이미지 | API 응답, 모델 추론 결과 |
+| 서버 역할 | nginx (파일 서버) | FastAPI + Uvicorn |
+
+## 리버스 프록시란
+
+**리버스 프록시** 는 클라이언트 앞에서 요청을 받아 내부 서버로 전달하는 중간자입니다. 클라이언트 입장에서는 nginx 하나와 통신하는 것처럼 보이지만, 실제로는 nginx가 요청 종류에 따라 적절한 백엔드로 전달합니다.
+
+```text
+[포워드 프록시 - 클라이언트 대리]
+클라이언트 → [프록시] → 인터넷 서버
+(클라이언트가 익명성 확보, 사내 필터링 용도)
+
+[리버스 프록시 - 서버 대리]
+클라이언트 → [nginx] → 내부 서버 A
+                     → 내부 서버 B
+(서버가 숨겨짐, 로드밸런싱·라우팅·SSL 종료)
+```
+
+AI 서비스에서 nginx는 리버스 프록시로 동작합니다. 단일 도메인(`api.example.com`)으로 들어오는 요청을 정적 파일 서버와 FastAPI 서버로 분기합니다.
+
+## nginx location 블록으로 라우팅
+
+nginx의 `location` 블록은 URL 경로 패턴에 따라 요청을 처리하는 방법을 지정합니다.
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    # 정적 파일: React 빌드 결과물 서빙
+    location / {
+        root /var/www/html;
+        index index.html;
+        # SPA 라우팅: 파일이 없으면 index.html로 폴백
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 동적 API: FastAPI로 프록시
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### location 매칭 우선순위
+
+nginx는 가장 구체적인 패턴을 우선 적용합니다.
+
+```text
+요청: GET /api/chat
+  → location /api/ 매칭 → FastAPI로 전달
+
+요청: GET /assets/index.js
+  → location / 매칭 → /var/www/html/assets/index.js 반환
+
+요청: GET /about (SPA 내부 라우트)
+  → location / 매칭 → /var/www/html/about 없음 → index.html 반환
+  → React Router가 클라이언트에서 /about 처리
+```
+
+`try_files $uri $uri/ /index.html` 설정이 핵심입니다. React처럼 클라이언트 사이드 라우팅을 쓰는 SPA는 `/about` 같은 URL이 서버에 실제 파일로 존재하지 않습니다. nginx가 파일을 못 찾으면 `index.html`을 반환하고, React Router가 브라우저에서 경로를 처리합니다.
+
+### 정적 파일 캐싱 최적화
+
+```nginx
+location /assets/ {
+    root /var/www/html;
+    # 빌드 해시가 파일명에 포함되므로 장기 캐싱 안전
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+location / {
+    root /var/www/html;
+    # index.html은 항상 최신 버전 확인
+    expires -1;
+    add_header Cache-Control "no-cache";
+    try_files $uri $uri/ /index.html;
+}
+```
+
+React의 빌드 결과물 파일명에는 콘텐츠 해시가 포함됩니다 (`index-Bx3kL9aP.js`). 파일이 바뀌면 이름도 바뀌므로, `/assets/` 하위 파일은 1년 캐싱을 걸어도 안전합니다. 반면 `index.html`은 새 배포 시 최신 JS 파일을 참조해야 하므로 캐싱하지 않습니다.
+
+## 핵심 정리
+
+- 정적 콘텐츠는 빌드 타임에 생성된 불변 파일이다. React 빌드 결과물이 대표적이며, nginx가 파일 시스템에서 직접 서빙한다.
+- 동적 콘텐츠는 요청마다 서버 코드가 실행되어 생성된다. FastAPI 엔드포인트가 대표적이며, 사용자·시간·입력에 따라 응답이 달라진다.
+- 리버스 프록시는 클라이언트 요청을 받아 내부 서버로 전달한다. nginx가 이 역할을 맡아 정적 파일과 API 요청을 분기한다.
+- nginx `location /` 는 정적 파일을, `location /api/` 는 FastAPI 백엔드를 향한다. `try_files`로 SPA 라우팅 폴백을 처리한다.
+- 정적 에셋은 파일명 해시 덕분에 장기 캐싱이 가능하다. `index.html`은 캐싱하지 않아야 새 배포가 즉시 반영된다.

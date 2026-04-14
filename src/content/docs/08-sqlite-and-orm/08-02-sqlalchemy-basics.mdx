@@ -1,0 +1,290 @@
+---
+title: SQLAlchemy ORM 기초
+description: SQLAlchemy Core와 ORM의 차이, declarative_base, Model 정의, Session, CRUD, FastAPI dependency 주입을 실전 예제로 익힌다
+sidebar:
+  order: 2
+learning_objectives:
+  - "SQLAlchemy Core와 ORM의 차이를 설명한다"
+  - "declarative_base로 모델을 정의하고 CRUD를 구현한다"
+  - "FastAPI dependency로 Session을 올바르게 주입한다"
+prerequisites:
+  - "SQLite 기본 이해 (08-01)"
+  - "FastAPI 기본 이해 (07-02)"
+  - "Python 클래스 기초"
+estimated_minutes: 20
+references:
+  - title: "SQLAlchemy 공식 문서 - ORM Quick Start"
+    url: "https://docs.sqlalchemy.org/en/20/orm/quickstart.html"
+    accessed: "2026-04-14"
+  - title: "FastAPI 공식 문서 - SQL Databases"
+    url: "https://fastapi.tiangolo.com/tutorial/sql-databases/"
+    accessed: "2026-04-14"
+---
+
+raw SQL을 직접 작성하면 타입 안전성이 없고, DB마다 문법이 달라 이식성이 낮다. SQLAlchemy는 Python 객체로 DB를 다루는 ORM(Object-Relational Mapper)을 제공한다.
+
+## Core vs ORM
+
+SQLAlchemy는 두 레이어를 제공한다.
+
+| 레이어 | 방식 | 특징 |
+|--------|------|------|
+| **Core** | SQL 표현식 빌더 | SQL에 가깝고 유연, 성능 중시 |
+| **ORM** | Python 클래스 ↔ 테이블 | 직관적, 관계 자동 처리 |
+
+대부분의 웹 애플리케이션에서는 ORM을 쓴다. 복잡한 리포팅 쿼리나 벌크 연산에만 Core를 추가로 활용한다.
+
+## 설치 및 설정
+
+```bash
+pip install sqlalchemy
+# SQLite는 추가 드라이버 불필요 (Python 내장)
+# PostgreSQL이라면: pip install psycopg2-binary
+```
+
+```python
+# database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+# SQLite 경로
+DATABASE_URL = "sqlite:///./app.db"
+
+# 엔진: DB 연결 관리
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},  # SQLite 전용 설정
+)
+
+# Session 팩토리
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# 모든 모델의 기반 클래스
+Base = declarative_base()
+```
+
+`check_same_thread=False` 는 SQLite에서 FastAPI의 비동기 처리와 함께 사용할 때 필요한 설정이다.
+
+## 모델 정의
+
+```python
+# models.py
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy.orm import relationship
+from database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계: User → Experiment (1:N)
+    experiments = relationship("Experiment", back_populates="owner")
+
+
+class Experiment(Base):
+    __tablename__ = "experiments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    accuracy = Column(Float)
+    model_path = Column(String)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 관계: Experiment → User
+    owner = relationship("User", back_populates="experiments")
+```
+
+## 테이블 생성
+
+```python
+# main.py 또는 별도 init 스크립트
+from database import engine
+from models import Base
+
+# 정의된 모든 모델의 테이블 생성 (없으면 생성, 있으면 건드리지 않음)
+Base.metadata.create_all(bind=engine)
+```
+
+운영 환경에서는 Alembic 마이그레이션을 사용한다(08-03 참고).
+
+## CRUD 구현
+
+```python
+# crud.py
+from sqlalchemy.orm import Session
+from models import User, Experiment
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+# --- User CRUD ---
+
+def get_user(db: Session, user_id: int) -> User | None:
+    return db.query(User).filter(User.id == user_id).first()
+
+
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.query(User).filter(User.email == email).first()
+
+
+def create_user(db: Session, email: str, password: str) -> User:
+    hashed_password = pwd_context.hash(password)
+    user = User(email=email, hashed_password=hashed_password)
+    db.add(user)
+    db.flush()   # ID 생성 (commit 전)
+    return user
+
+
+# --- Experiment CRUD ---
+
+def get_experiments(db: Session, owner_id: int, skip: int = 0, limit: int = 20):
+    return (
+        db.query(Experiment)
+        .filter(Experiment.owner_id == owner_id)
+        .order_by(Experiment.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+def create_experiment(
+    db: Session,
+    name: str,
+    accuracy: float,
+    owner_id: int,
+    description: str = "",
+) -> Experiment:
+    experiment = Experiment(
+        name=name,
+        accuracy=accuracy,
+        owner_id=owner_id,
+        description=description,
+    )
+    db.add(experiment)
+    db.flush()
+    return experiment
+
+
+def update_experiment(
+    db: Session,
+    experiment_id: int,
+    accuracy: float,
+) -> Experiment | None:
+    experiment = db.query(Experiment).filter(Experiment.id == experiment_id).first()
+    if not experiment:
+        return None
+    experiment.accuracy = accuracy  # ORM 객체 속성 변경
+    db.flush()
+    return experiment
+
+
+def delete_experiment(db: Session, experiment_id: int) -> bool:
+    experiment = db.query(Experiment).filter(Experiment.id == experiment_id).first()
+    if not experiment:
+        return False
+    db.delete(experiment)
+    return True
+```
+
+## FastAPI Dependency로 Session 주입
+
+```python
+# dependencies.py
+from database import SessionLocal
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+```
+
+```python
+# main.py
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+import crud
+from dependencies import get_db
+from database import engine
+from models import Base
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+
+class ExperimentCreate(BaseModel):
+    name: str
+    accuracy: float
+    description: str = ""
+
+
+class ExperimentResponse(BaseModel):
+    id: int
+    name: str
+    accuracy: float
+    description: str
+
+    class Config:
+        from_attributes = True  # SQLAlchemy 모델에서 직접 변환
+
+
+@app.post("/experiments", response_model=ExperimentResponse)
+def create_experiment(
+    body: ExperimentCreate,
+    owner_id: int,
+    db: Session = Depends(get_db),
+):
+    return crud.create_experiment(
+        db=db,
+        name=body.name,
+        accuracy=body.accuracy,
+        owner_id=owner_id,
+        description=body.description,
+    )
+
+
+@app.get("/experiments", response_model=list[ExperimentResponse])
+def list_experiments(
+    owner_id: int,
+    skip: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    return crud.get_experiments(db=db, owner_id=owner_id, skip=skip, limit=limit)
+
+
+@app.delete("/experiments/{experiment_id}")
+def delete_experiment(experiment_id: int, db: Session = Depends(get_db)):
+    deleted = crud.delete_experiment(db=db, experiment_id=experiment_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="실험을 찾을 수 없습니다")
+    return {"message": "삭제되었습니다"}
+```
+
+`get_db` dependency는 요청마다 새 Session을 열고, 응답 후 자동으로 commit/rollback/close를 처리한다.
+
+## 핵심 정리
+
+- **ORM은 Python 클래스와 DB 테이블을 매핑한다** — SQL을 직접 작성하지 않고 객체를 다루듯 DB를 조작한다
+- **`declarative_base()`로 모델 기반 클래스를 만든다** — 모든 모델이 이 클래스를 상속한다
+- **`SessionLocal`은 Session 팩토리다** — 실제 Session은 요청마다 새로 생성한다
+- **FastAPI `Depends(get_db)`로 Session을 주입한다** — 요청 후 자동 commit/rollback/close가 보장된다
+- **`db.flush()`는 SQL을 실행하되 commit하지 않는다** — ID를 얻으면서 트랜잭션을 유지할 때 사용한다

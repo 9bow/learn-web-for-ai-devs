@@ -1,0 +1,146 @@
+[
+  {
+    "id": "q1",
+    "question": "FastAPI에서 `allow_origins=['*']`와 `allow_credentials=True`를 함께 설정하면?",
+    "options": [
+      "모든 사이트에서 인증 포함 요청이 허용된다",
+      "브라우저가 이 조합을 거부하므로 동작하지 않으며, 의도치 않은 origin의 요청도 허용하는 보안 위험이 있다",
+      "HTTPS에서만 동작한다",
+      "GET 요청만 허용된다"
+    ],
+    "answer": 1,
+    "explanation": "CORS 스펙에 따르면 와일드카드 origin과 credentials를 함께 사용하면 브라우저가 거부한다. 또한 allow_origins=['*']는 모든 도메인에서 API에 접근할 수 있음을 의미하므로 프로덕션에서는 명시적인 origin 목록을 사용해야 한다."
+  },
+  {
+    "id": "q2",
+    "question": "비밀번호를 MD5로 해싱하는 것이 현재 기준으로 취약한 이유는?",
+    "options": [
+      "MD5가 비가역적이기 때문이다",
+      "MD5는 빠른 해시 함수라 GPU로 초당 수십억 번의 해시를 계산해 무차별 대입이 가능하고, 레인보우 테이블 공격에도 취약하다",
+      "MD5가 64자리 출력을 생성하기 때문이다",
+      "MD5는 Linux에서만 동작하기 때문이다"
+    ],
+    "answer": 1,
+    "explanation": "비밀번호 해싱은 의도적으로 느린 알고리즘(bcrypt, Argon2)을 사용해야 한다. MD5는 빠른 데이터 무결성 검사용으로 설계되어 GPU로 초당 수십억 번 계산이 가능하다. bcrypt는 연산 비용을 조절할 수 있어(cost factor) 하드웨어가 빨라져도 보안 수준을 유지할 수 있다."
+  },
+  {
+    "id": "q3",
+    "question": "다음 중 SQL Injection에 취약한 코드는?",
+    "options": [
+      "db.execute(select(User).where(User.name == username))",
+      "db.execute(text('SELECT * FROM users WHERE name = :name'), {'name': username})",
+      "db.execute(text(f'SELECT * FROM users WHERE name = \\'{username}\\''))",
+      "User.query.filter_by(name=username).first()"
+    ],
+    "answer": 2,
+    "explanation": "f-string으로 사용자 입력을 SQL 쿼리에 직접 삽입하면 SQL Injection에 취약하다. username = \"'; DROP TABLE users; --\" 같은 입력으로 DB를 파괴할 수 있다. 나머지는 모두 파라미터 바인딩을 사용하거나 ORM이 자동으로 이스케이프한다."
+  },
+  {
+    "id": "q4",
+    "question": "비동기 FastAPI 라우트에서 동기 블로킹 코드(예: time.sleep(), 동기 requests 호출)를 실행하면?",
+    "options": [
+      "Python이 자동으로 비동기로 변환한다",
+      "이벤트 루프를 블로킹해 해당 작업이 완료될 때까지 다른 모든 요청이 처리되지 않는다",
+      "별도 스레드에서 자동으로 실행된다",
+      "경고 메시지만 출력되고 정상 동작한다"
+    ],
+    "answer": 1,
+    "explanation": "async 함수에서 동기 블로킹 코드를 실행하면 이벤트 루프 전체가 멈춘다. CPU bound 작업은 asyncio.run_in_executor()로 스레드 풀에, IO bound 작업은 비동기 라이브러리(httpx, asyncpg 등)를 사용해야 한다. 이것이 FastAPI에서 비동기 패턴이 중요한 이유다."
+  },
+  {
+    "id": "q5",
+    "question": "구조화 로그(Structured JSON Log)가 일반 텍스트 로그보다 유리한 점은?",
+    "options": [
+      "파일 크기가 더 작다",
+      "로그 집계 시스템(Elasticsearch, Loki 등)에서 필드 기반 검색과 필터링이 가능해 장애 원인을 빠르게 찾을 수 있다",
+      "사람이 읽기 더 쉽다",
+      "암호화가 자동으로 적용된다"
+    ],
+    "answer": 1,
+    "explanation": "구조화 로그는 각 필드(user_id, error_code, duration_ms 등)를 별도 키-값으로 저장한다. `user_id: 42`로 특정 사용자의 요청만 필터링하거나, `duration_ms > 1000`으로 느린 요청만 찾는 것이 가능하다. 텍스트 로그는 regex로 파싱해야 하므로 느리고 오류가 발생하기 쉽다."
+  },
+  {
+    "id": "q6",
+    "question": "Prometheus Histogram과 Counter의 차이점은?",
+    "options": [
+      "Histogram은 증가만 하고 Counter는 감소도 가능하다",
+      "Counter는 단순 누적 카운트(요청 수)를, Histogram은 값의 분포(응답 시간 p50/p90/p99)를 측정한다",
+      "Histogram은 서버에서만 사용하고 Counter는 클라이언트에서 사용한다",
+      "둘은 동일하며 이름만 다르다"
+    ],
+    "answer": 1,
+    "explanation": "Counter는 단조 증가하는 값(총 요청 수, 에러 수)에 사용한다. Histogram은 값의 분포를 버킷별로 측정해 p50, p90, p99 같은 백분위수를 계산할 수 있다. API 응답 시간처럼 분포가 중요한 메트릭은 Histogram을 사용한다."
+  },
+  {
+    "id": "q7",
+    "question": "OpenTelemetry 트레이싱에서 'Span'의 의미는?",
+    "options": [
+      "서버 간 네트워크 연결",
+      "하나의 요청 처리 흐름에서 특정 작업 단위 — 시작 시간, 종료 시간, 태그, 에러 정보를 포함한다",
+      "Prometheus 메트릭 수집 주기",
+      "로그 파일의 크기 단위"
+    ],
+    "answer": 1,
+    "explanation": "Span은 추적의 기본 단위다. 'HTTP 요청 처리', 'DB 쿼리', 'ML 추론' 같은 작업 단위가 각각 Span이 된다. Span들은 Trace로 묶여 요청의 전체 흐름을 타임라인으로 시각화할 수 있다. Span에 attribute를 추가해 디버깅에 필요한 컨텍스트 정보를 담을 수 있다."
+  },
+  {
+    "id": "q8",
+    "question": "ML 모델 서비스에서 '데이터 드리프트(Data Drift)'를 모니터링해야 하는 이유는?",
+    "options": [
+      "데이터베이스 스토리지 최적화를 위해",
+      "프로덕션 입력 데이터의 분포가 학습 데이터와 달라지면 모델 성능이 저하되므로, 이를 조기에 감지해 재학습 시점을 결정하기 위해",
+      "네트워크 지연을 줄이기 위해",
+      "사용자 인증을 강화하기 위해"
+    ],
+    "answer": 1,
+    "explanation": "ML 모델은 학습 데이터의 분포를 학습한다. 시간이 지남에 따라 실제 입력 데이터의 분포가 학습 당시와 달라지면(계절 변화, 사용자 행동 변화 등) 정확도가 떨어진다. 입력 피처의 통계적 특성을 지속적으로 모니터링하고 임계값을 넘으면 재학습을 트리거해야 한다."
+  },
+  {
+    "id": "q9",
+    "question": "배포 전 체크리스트에서 'Alembic upgrade head'를 실행하는 이유는?",
+    "options": [
+      "DB를 백업하기 위해",
+      "코드의 SQLAlchemy 모델 변경 사항을 실제 DB 스키마에 적용해 코드와 DB 스키마를 동기화하기 위해",
+      "DB 인덱스를 재생성하기 위해",
+      "DB 연결을 테스트하기 위해"
+    ],
+    "answer": 1,
+    "explanation": "새 컬럼이나 테이블을 추가하는 코드를 배포했는데 마이그레이션을 실행하지 않으면 DB에 해당 컬럼이 없어 500 에러가 발생한다. 배포 전 `alembic upgrade head`로 모든 마이그레이션을 최신 상태로 적용해야 한다. CI/CD 파이프라인에 자동화하는 것이 권장된다."
+  },
+  {
+    "id": "q10",
+    "question": "Rate Limiting을 ML 추론 엔드포인트에 적용해야 하는 이유는?",
+    "options": [
+      "모델 정확도를 높이기 위해",
+      "악의적이거나 실수로 발생하는 과도한 요청이 GPU/CPU 자원을 소진해 다른 사용자의 요청을 처리하지 못하는 상황을 방지하기 위해",
+      "API 문서를 자동 생성하기 위해",
+      "응답 형식을 통일하기 위해"
+    ],
+    "answer": 1,
+    "explanation": "ML 추론은 일반 API 요청보다 CPU/GPU 자원을 훨씬 많이 사용한다. Rate Limiting 없이는 단일 클라이언트가 수백 건의 요청을 동시에 보내 전체 서비스를 마비시킬 수 있다. IP당 또는 사용자당 분당 N회 제한으로 자원을 공정하게 분배하고 DoS 공격을 방어한다."
+  },
+  {
+    "id": "q11",
+    "question": "PR 체크리스트에서 '매직 넘버(Magic Number)를 없애라'는 규칙의 의미는?",
+    "options": [
+      "랜덤 수 생성을 금지한다",
+      "코드에 의미를 알 수 없는 숫자 리터럴(예: timeout=30)을 그대로 쓰지 말고, 의미 있는 이름의 상수(INFERENCE_TIMEOUT_SECONDS = 30)로 정의해야 한다",
+      "정수 대신 부동소수점을 사용해야 한다",
+      "DB Primary Key를 숫자로 쓰지 말아야 한다"
+    ],
+    "answer": 1,
+    "explanation": "코드에 `if retry_count > 3:` 같이 숫자가 그대로 있으면 이 3이 무엇을 의미하는지, 왜 3인지 알기 어렵다. `MAX_RETRY_COUNT = 3`으로 상수로 추출하면 의도가 명확해지고, 값을 변경해야 할 때 한 곳만 수정하면 된다."
+  },
+  {
+    "id": "q12",
+    "question": "AI 모델 서비스에서 모델 체크섬(Checksum)을 검증하는 이유는?",
+    "options": [
+      "모델 추론 속도를 높이기 위해",
+      "배포된 모델 파일이 의도한 버전과 동일한지 확인해, 손상되거나 다른 버전의 모델로 서비스하는 것을 방지하기 위해",
+      "모델 압축 비율을 높이기 위해",
+      "사용자 인증에 사용하기 위해"
+    ],
+    "answer": 1,
+    "explanation": "파일 전송 중 손상이나 잘못된 모델 파일 배포가 발생할 수 있다. SHA-256 같은 해시로 모델 파일의 체크섬을 미리 기록해두고, 서비스 시작 시 검증하면 의도치 않은 모델로 서비스하는 상황을 방지할 수 있다. 특히 여러 버전의 모델을 운영할 때 중요하다."
+  }
+]

@@ -1,0 +1,196 @@
+---
+title: REST API 설계 원칙
+description: 리소스 중심 URL 설계, HTTP 메서드 시맨틱스, 상태 비저장성과 멱등성을 이해한다
+sidebar:
+  order: 1
+learning_objectives:
+  - "리소스를 명사로 표현하는 URL 설계 방법을 익힌다"
+  - "HTTP 메서드별 시맨틱스와 멱등성을 구분한다"
+  - "버전 관리, 페이지네이션, 필터링 패턴을 적용한다"
+prerequisites:
+  - "HTTP 요청/응답 구조 이해"
+  - "기본 Python 문법"
+estimated_minutes: 20
+references:
+  - title: "HTTP/1.1 Methods — RFC 7231"
+    url: "https://datatracker.ietf.org/doc/html/rfc7231#section-4"
+    accessed: "2026-04-14"
+  - title: "REST API Design Best Practices"
+    url: "https://restfulapi.net/"
+    accessed: "2026-04-14"
+---
+
+REST(Representational State Transfer)는 HTTP를 최대한 활용하는 API 아키텍처 스타일이다. "REST하다"는 표현은 종종 남용되지만, 핵심 원칙은 명확하다. AI 모델을 서비스할 때도 이 원칙을 따르면 클라이언트 코드가 예측 가능해지고 유지보수가 쉬워진다.
+
+## 리소스를 명사로 표현하라
+
+가장 흔한 실수는 URL에 동사를 쓰는 것이다.
+
+```text
+# 잘못된 예: 동사 중심
+GET /getUser/123
+POST /createItem
+DELETE /deleteModel/gpt-4
+
+# 올바른 예: 명사(리소스) 중심
+GET /users/123
+POST /items
+DELETE /models/gpt-4
+```
+
+리소스는 컬렉션(`/users`)과 단일 항목(`/users/123`)으로 구분한다. 중첩 관계는 경로로 표현한다.
+
+```text
+GET /users/123/predictions      # 유저 123의 예측 목록
+POST /users/123/predictions     # 유저 123의 예측 생성
+GET /users/123/predictions/456  # 유저 123의 예측 456 조회
+```
+
+## HTTP 메서드 시맨틱스
+
+| 메서드 | 의미 | 멱등성 | 안전성 | 사용 예 |
+|--------|------|--------|--------|---------|
+| GET | 조회 | O | O | 리소스 읽기 |
+| POST | 생성/액션 | X | X | 새 리소스 생성 |
+| PUT | 전체 교체 | O | X | 리소스 전체 업데이트 |
+| PATCH | 부분 수정 | X | X | 필드 일부 변경 |
+| DELETE | 삭제 | O | X | 리소스 제거 |
+
+**멱등성(Idempotency)** 이란 같은 요청을 여러 번 보내도 결과가 동일한 성질이다. GET, PUT, DELETE는 멱등이다. POST는 매번 새 리소스를 만들기 때문에 멱등이 아니다. AI 모델 추론 엔드포인트는 보통 POST를 쓴다 — 같은 입력이라도 비결정적 출력이 나올 수 있기 때문이다.
+
+```http
+# 예측 요청 (POST)
+POST /v1/predictions HTTP/1.1
+Content-Type: application/json
+
+{
+  "model": "sentiment-v2",
+  "text": "FastAPI is great"
+}
+```
+
+```http
+# 응답
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "id": "pred_abc123",
+  "label": "positive",
+  "score": 0.97,
+  "model": "sentiment-v2"
+}
+```
+
+## 상태 코드를 의미에 맞게 사용하라
+
+```text
+200 OK           — 성공적 조회/수정
+201 Created      — 리소스 생성 완료
+204 No Content   — 성공했지만 반환할 본문 없음 (DELETE)
+400 Bad Request  — 클라이언트 요청 오류 (유효성 검사 실패)
+401 Unauthorized — 인증 필요
+403 Forbidden    — 인증은 됐지만 권한 없음
+404 Not Found    — 리소스 없음
+422 Unprocessable Entity — 형식은 맞지만 의미상 오류 (FastAPI 기본값)
+500 Internal Server Error — 서버 오류
+```
+
+FastAPI는 Pydantic 유효성 검사 실패 시 자동으로 422를 반환한다. 직접 오류를 낼 때는 `HTTPException`을 사용한다.
+
+```python
+from fastapi import FastAPI, HTTPException
+
+app = FastAPI()
+
+@app.get("/models/{model_id}")
+async def get_model(model_id: str):
+    model = db.get(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다")
+    return model
+```
+
+## 버전 관리
+
+API는 변한다. 버전을 URL에 명시하면 하위 호환성을 유지할 수 있다.
+
+```text
+# URL 경로 버전 (가장 흔함)
+/v1/predictions
+/v2/predictions
+
+# 헤더 버전 (깔끔하지만 캐시하기 어려움)
+Accept: application/vnd.myapi.v2+json
+```
+
+FastAPI에서는 `APIRouter`의 `prefix`로 버전을 분리한다.
+
+```python
+from fastapi import APIRouter
+
+v1_router = APIRouter(prefix="/v1")
+v2_router = APIRouter(prefix="/v2")
+
+@v1_router.post("/predictions")
+async def predict_v1(text: str):
+    ...
+
+@v2_router.post("/predictions")
+async def predict_v2(payload: PredictRequest):
+    ...
+```
+
+## 페이지네이션과 필터링
+
+대량의 데이터를 한 번에 반환하면 안 된다. 커서 기반과 오프셋 기반 두 가지 방식이 있다.
+
+```text
+# 오프셋 기반 (구현 쉬움, 대용량에 부적합)
+GET /predictions?limit=20&offset=40
+
+# 커서 기반 (실시간 데이터에 적합)
+GET /predictions?limit=20&cursor=pred_abc123
+```
+
+필터링은 쿼리 파라미터로 표현한다.
+
+```python
+from fastapi import FastAPI, Query
+from typing import Optional
+
+@app.get("/predictions")
+async def list_predictions(
+    limit: int = Query(20, le=100),
+    offset: int = Query(0, ge=0),
+    model: Optional[str] = None,
+    label: Optional[str] = None,
+):
+    query = db.query(Prediction)
+    if model:
+        query = query.filter(Prediction.model == model)
+    if label:
+        query = query.filter(Prediction.label == label)
+    return query.offset(offset).limit(limit).all()
+```
+
+## API 설계 체크리스트
+
+| 항목 | 확인 |
+|------|------|
+| URL에 동사가 없는가? | ☐ |
+| HTTP 메서드가 의미에 맞는가? | ☐ |
+| 상태 코드가 정확한가? | ☐ |
+| API 버전이 명시되어 있는가? | ☐ |
+| 컬렉션 엔드포인트에 페이지네이션이 있는가? | ☐ |
+| 오류 응답에 `detail` 필드가 있는가? | ☐ |
+| 인증이 필요한 엔드포인트가 명확한가? | ☐ |
+| 큰 페이로드(이미지, 바이너리)는 별도 업로드 흐름을 쓰는가? | ☐ |
+
+## 핵심 정리
+
+- **리소스는 명사** — URL에 동사를 쓰지 않는다
+- **HTTP 메서드가 동사 역할** — GET/POST/PUT/PATCH/DELETE를 올바르게 쓴다
+- **멱등성 인식** — GET, PUT, DELETE는 멱등, POST는 아니다
+- **버전은 URL에** — `/v1/` 접두사가 가장 실용적이다
+- **페이지네이션 필수** — 컬렉션 엔드포인트는 항상 limit/offset 또는 커서를 지원한다

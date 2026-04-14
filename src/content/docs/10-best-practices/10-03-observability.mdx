@@ -1,0 +1,241 @@
+---
+title: "관측성"
+description: 로그, 메트릭, 트레이싱 3가지 관측성 기둥을 FastAPI 서비스에 적용하는 방법을 익힌다.
+sidebar:
+  order: 3
+learning_objectives:
+  - "구조화 로그(structured JSON)로 검색 가능한 로그를 남길 수 있다"
+  - "Prometheus 메트릭으로 서비스 상태를 수치로 측정할 수 있다"
+  - "OpenTelemetry 트레이싱으로 요청의 전체 경로를 추적할 수 있다"
+prerequisites:
+  - "FastAPI 기초 (섹션 07)"
+  - "Docker 기본 사용 경험"
+estimated_minutes: 20
+references:
+  - title: "OpenTelemetry Python 문서"
+    url: "https://opentelemetry.io/docs/languages/python/"
+    accessed: "2026-04-14"
+  - title: "Prometheus 공식 문서"
+    url: "https://prometheus.io/docs/introduction/overview/"
+    accessed: "2026-04-14"
+  - title: "structlog 문서"
+    url: "https://www.structlog.org/en/stable/"
+    accessed: "2026-04-14"
+---
+
+프로덕션 서비스는 "왜 느려졌는가?", "어떤 사용자에게 에러가 났는가?", "ML 모델 정확도가 떨어졌는가?"를 빠르게 답할 수 있어야 한다. 이를 가능하게 하는 것이 **관측성(Observability)**의 세 기둥: 로그, 메트릭, 트레이싱이다.
+
+## 3가지 관측성 기둥 비교
+
+| 기둥 | 목적 | 주요 질문 | 도구 |
+|------|------|-----------|------|
+| **Logs** | 이벤트 기록 | "무슨 일이 일어났는가?" | structlog, Python logging |
+| **Metrics** | 수치 측정 | "얼마나 자주, 얼마나 빠른가?" | Prometheus, statsd |
+| **Traces** | 요청 추적 | "어디서 시간이 걸렸는가?" | OpenTelemetry, Jaeger |
+
+세 가지를 함께 써야 장애 원인을 정확히 파악할 수 있다. 로그만으로는 "에러가 났다"는 사실을 알지만, 트레이싱 없이는 어느 서비스에서 병목이 생겼는지 모른다.
+
+## Logs — 구조화 로그
+
+일반 텍스트 로그는 grep으로 분석해야 한다. JSON 구조화 로그는 Elasticsearch, Loki, CloudWatch 같은 로그 집계 시스템에서 필드 기반 검색이 가능하다.
+
+```python
+import structlog
+import logging
+
+# 설정 — 앱 시작 시 1회
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.stdlib.add_log_level,
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.JSONRenderer(),  # JSON 출력
+    ],
+    wrapper_class=structlog.stdlib.BoundLogger,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+)
+
+logger = structlog.get_logger()
+
+# 사용 예
+@app.post("/api/todos")
+async def create_todo(todo: TodoCreate, db: AsyncSession = Depends(get_db)):
+    logger.info(
+        "todo.create.start",
+        title=todo.title,
+        user_id=todo.user_id,
+    )
+    try:
+        result = await create_todo_in_db(todo, db)
+        logger.info("todo.create.success", todo_id=result.id)
+        return result
+    except Exception as e:
+        logger.error("todo.create.failed", error=str(e), exc_info=True)
+        raise
+```
+
+출력 예:
+```json
+{"timestamp": "2026-04-14T10:23:45Z", "level": "info", "event": "todo.create.start", "title": "논문 읽기", "user_id": 42}
+{"timestamp": "2026-04-14T10:23:45Z", "level": "info", "event": "todo.create.success", "todo_id": 123}
+```
+
+### 로그 레벨 가이드
+
+- `DEBUG` — 개발 중 상세 정보. 프로덕션에서는 비활성화.
+- `INFO` — 정상 흐름의 주요 이벤트 (요청 시작, 완료).
+- `WARNING` — 비정상이지만 서비스 가능한 상황 (레이트 리밋 근접, 재시도).
+- `ERROR` — 처리에 실패한 사건. 즉시 확인 필요.
+- `CRITICAL` — 서비스 중단 수준의 장애.
+
+## Metrics — Prometheus
+
+메트릭은 시계열 수치 데이터다. "초당 요청 수", "에러율", "응답 시간 p99" 같은 수치를 지속적으로 수집한다.
+
+```python
+from prometheus_client import Counter, Histogram, Gauge, make_asgi_app
+from fastapi import FastAPI
+
+# 메트릭 정의
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "endpoint", "status_code"]
+)
+REQUEST_DURATION = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration",
+    ["method", "endpoint"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+)
+ML_INFERENCE_DURATION = Histogram(
+    "ml_inference_duration_seconds",
+    "ML model inference duration",
+    ["model_name"]
+)
+ACTIVE_CONNECTIONS = Gauge("active_connections", "Active WebSocket connections")
+
+# Prometheus 스크랩 엔드포인트 추가
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
+
+# 미들웨어로 자동 측정
+import time
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - start
+
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status_code=response.status_code
+    ).inc()
+    REQUEST_DURATION.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+
+    return response
+```
+
+ML 추론 시간 측정:
+```python
+@app.post("/api/predict")
+async def predict(request: PredictRequest):
+    with ML_INFERENCE_DURATION.labels(model_name="classifier").time():
+        result = model.predict(request.text)
+    return {"result": result}
+```
+
+Prometheus가 `/metrics` 엔드포인트를 주기적으로 스크랩하면, Grafana로 대시보드를 만들 수 있다.
+
+## Tracing — OpenTelemetry
+
+트레이싱은 하나의 요청이 여러 서비스를 거칠 때 각 단계에서 얼마나 시간이 걸렸는지 추적한다. 단일 FastAPI 앱에서도 DB 쿼리, ML 추론, 외부 API 호출 중 어디서 지연이 발생했는지 파악할 수 있다.
+
+```bash
+pip install opentelemetry-sdk opentelemetry-instrumentation-fastapi opentelemetry-instrumentation-sqlalchemy opentelemetry-exporter-otlp
+```
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+# 초기화
+provider = TracerProvider()
+exporter = OTLPSpanExporter(endpoint="http://jaeger:4317")
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+
+# FastAPI + SQLAlchemy 자동 계측
+FastAPIInstrumentor.instrument_app(app)
+SQLAlchemyInstrumentor().instrument(engine=engine)
+
+# 수동 span 추가 (ML 추론 추적)
+tracer = trace.get_tracer(__name__)
+
+@app.post("/api/predict")
+async def predict(request: PredictRequest):
+    with tracer.start_as_current_span("ml.inference") as span:
+        span.set_attribute("model.name", "classifier")
+        span.set_attribute("input.length", len(request.text))
+        result = model.predict(request.text)
+        span.set_attribute("prediction", result)
+    return {"result": result}
+```
+
+이제 Jaeger UI에서 각 요청의 타임라인을 확인할 수 있다: `HTTP 수신 → DB 조회(23ms) → ML 추론(87ms) → 응답 반환`.
+
+## docker-compose로 관측성 스택 구성
+
+```yaml
+services:
+  app:
+    build: .
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'fastapi'
+    static_configs:
+      - targets: ['app:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+```
+
+## 핵심 정리
+
+- **로그** — 구조화 JSON 로그를 남겨야 로그 집계 시스템에서 필드 기반 검색이 가능하다. `structlog`를 쓰면 편하다.
+- **메트릭** — Prometheus Counter/Histogram으로 요청 수, 응답 시간, ML 추론 시간을 수치로 측정한다. `/metrics` 엔드포인트 하나로 Grafana 대시보드까지 연결된다.
+- **트레이싱** — OpenTelemetry로 FastAPI + SQLAlchemy를 자동 계측하면 요청별 타임라인을 Jaeger에서 확인할 수 있다.
+- 세 기둥을 함께 써야 "에러 → 어떤 요청? → 어디서 느림? → 어떤 데이터?"까지 빠르게 추적할 수 있다.

@@ -1,0 +1,146 @@
+[
+  {
+    "id": "q1",
+    "question": "React의 가상 DOM(Virtual DOM)이 성능 최적화에 기여하는 방식은?",
+    "options": [
+      "DOM 조작을 GPU에서 처리한다",
+      "이전 가상 DOM과 새 가상 DOM을 비교(diffing)해 실제로 변경된 부분만 실제 DOM에 반영한다",
+      "모든 렌더링을 서버에서 처리한다",
+      "CSS 애니메이션을 JavaScript 없이 처리한다"
+    ],
+    "answer": 1,
+    "explanation": "실제 DOM 조작은 비용이 크다. React는 메모리에 가상 DOM 트리를 유지하고, 상태가 변경되면 새 가상 DOM을 생성해 이전 것과 비교(reconciliation)한다. 변경된 최소 노드만 실제 DOM에 반영하므로 불필요한 DOM 조작을 줄인다."
+  },
+  {
+    "id": "q2",
+    "question": "useState와 useRef의 핵심 차이점은?",
+    "options": [
+      "useState는 함수형 컴포넌트에서만 사용 가능하고 useRef는 클래스 컴포넌트에서만 사용한다",
+      "useState 값이 바뀌면 컴포넌트가 리렌더링되고, useRef 값이 바뀌어도 리렌더링이 발생하지 않는다",
+      "useRef는 서버 컴포넌트에서 사용 가능하고 useState는 불가능하다",
+      "useState는 문자열만, useRef는 객체만 저장할 수 있다"
+    ],
+    "answer": 1,
+    "explanation": "useState는 렌더링 사이클에 통합된 반응형 상태다. 값이 변경되면 React가 컴포넌트를 다시 렌더링한다. useRef는 렌더링과 무관한 가변 컨테이너로, 값이 변해도 리렌더링을 트리거하지 않는다. DOM 요소 참조, 타이머 ID, 이전 값 저장 등에 사용한다."
+  },
+  {
+    "id": "q3",
+    "question": "useEffect의 의존성 배열(dependency array)에 빈 배열 `[]`을 전달하면?",
+    "options": [
+      "컴포넌트가 렌더링될 때마다 effect가 실행된다",
+      "effect가 전혀 실행되지 않는다",
+      "컴포넌트가 마운트될 때 1회만 실행되고, 언마운트 시 cleanup 함수가 호출된다",
+      "부모 컴포넌트가 리렌더링될 때마다 실행된다"
+    ],
+    "answer": 2,
+    "explanation": "의존성 배열이 빈 배열이면 React는 의존하는 값이 없다고 판단해 마운트 시 1회만 effect를 실행한다. return으로 cleanup 함수를 반환하면 언마운트 시 호출된다. 이 패턴은 이벤트 리스너 등록, WebSocket 연결, API 데이터 초기 로드에 자주 사용된다."
+  },
+  {
+    "id": "q4",
+    "question": "React의 key prop이 리스트 렌더링에서 중요한 이유는?",
+    "options": [
+      "CSS 스타일링을 위한 고유 식별자로 사용된다",
+      "React가 리스트 항목을 추가/삭제/이동할 때 어떤 DOM 요소를 재사용할지 효율적으로 결정할 수 있다",
+      "서버 사이드 렌더링에서만 필요하다",
+      "key 없이는 컴포넌트가 렌더링되지 않는다"
+    ],
+    "answer": 1,
+    "explanation": "key는 React reconciliation 알고리즘이 리스트 항목의 정체성을 추적하는 데 사용한다. key가 없거나 index를 key로 쓰면 항목 삽입/삭제 시 DOM 업데이트가 비효율적이고 상태가 잘못 유지될 수 있다. 데이터의 고유 ID를 key로 사용하는 것이 권장된다."
+  },
+  {
+    "id": "q5",
+    "question": "useCallback이 유용한 상황은?",
+    "options": [
+      "모든 함수 정의에 기본으로 적용해야 한다",
+      "자식 컴포넌트에 함수를 prop으로 전달할 때, 부모 리렌더링 시 함수 참조가 바뀌어 자식이 불필요하게 리렌더링되는 것을 방지한다",
+      "비동기 함수를 동기로 변환할 때 사용한다",
+      "함수 실행 결과를 캐싱한다"
+    ],
+    "answer": 1,
+    "explanation": "useCallback은 함수 자체를 메모이제이션한다. React.memo로 감싼 자식 컴포넌트에 콜백 함수를 전달할 때, useCallback 없이는 부모 리렌더링마다 새 함수 참조가 생성되어 자식도 불필요하게 렌더링된다. 무분별한 사용은 오히려 오버헤드가 되므로 실제 성능 문제가 있을 때만 적용한다."
+  },
+  {
+    "id": "q6",
+    "question": "Next.js App Router에서 서버 컴포넌트(Server Component)가 할 수 없는 것은?",
+    "options": [
+      "데이터베이스를 직접 조회하는 것",
+      "파일 시스템에 접근하는 것",
+      "useState, useEffect 같은 React 훅을 사용하고 브라우저 이벤트 핸들러를 연결하는 것",
+      "fetch로 외부 API를 호출하는 것"
+    ],
+    "answer": 2,
+    "explanation": "서버 컴포넌트는 서버에서만 실행되므로 브라우저 API와 상호작용할 수 없다. useState, useEffect, onClick 등은 클라이언트 런타임이 필요하다. 상호작용이 필요한 부분은 'use client' 지시어가 있는 클라이언트 컴포넌트로 분리해야 한다."
+  },
+  {
+    "id": "q7",
+    "question": "Next.js에서 `loading.tsx` 파일의 역할은?",
+    "options": [
+      "전체 앱의 로딩 스피너를 전역으로 설정한다",
+      "해당 라우트 세그먼트가 로딩 중일 때 React Suspense를 활용해 자동으로 보여주는 폴백 UI다",
+      "서버 컴포넌트의 데이터 페칭 타임아웃을 설정한다",
+      "정적 에셋의 로딩 순서를 지정한다"
+    ],
+    "answer": 1,
+    "explanation": "Next.js App Router에서 `loading.tsx`를 만들면 해당 라우트의 서버 컴포넌트가 데이터를 페칭하는 동안 자동으로 Suspense 폴백으로 표시된다. 개발자가 직접 Suspense를 감쌀 필요 없이 파일 기반 컨벤션으로 로딩 UI를 구현할 수 있다."
+  },
+  {
+    "id": "q8",
+    "question": "React Context API를 남용하면 발생하는 문제는?",
+    "options": [
+      "메모리 누수가 발생한다",
+      "Context 값이 변경되면 해당 Context를 구독하는 모든 컴포넌트가 리렌더링되어 성능이 저하된다",
+      "비동기 처리가 불가능해진다",
+      "TypeScript 타입 추론이 동작하지 않는다"
+    ],
+    "answer": 1,
+    "explanation": "Context는 prop drilling 해결에 유용하지만, 자주 변경되는 값(예: 마우스 좌표, 실시간 타이머)을 Context에 넣으면 구독 컴포넌트 전체가 불필요하게 리렌더링된다. 자주 변경되는 전역 상태에는 Zustand, Jotai 같은 외부 상태 관리 라이브러리를 사용한다."
+  },
+  {
+    "id": "q9",
+    "question": "Next.js의 Image 컴포넌트(`<Image />`)가 기본 `<img>` 태그보다 나은 점은?",
+    "options": [
+      "SVG 형식만 지원해 품질이 높다",
+      "자동 WebP 변환, 뷰포트 기반 크기 조정, lazy loading, 레이아웃 시프트 방지(CLS 개선)를 자동으로 처리한다",
+      "서버 사이드에서만 렌더링된다",
+      "CSS 필터 효과를 자동으로 적용한다"
+    ],
+    "answer": 1,
+    "explanation": "Next.js Image 컴포넌트는 최신 포맷(WebP, AVIF) 자동 변환, 뷰포트 크기에 맞는 srcset 생성, 기본 lazy loading, width/height 명시로 CLS(Cumulative Layout Shift) 방지 등을 자동으로 처리한다. Core Web Vitals 점수 향상에 직접적으로 기여한다."
+  },
+  {
+    "id": "q10",
+    "question": "React Query(TanStack Query)가 해결하는 주된 문제는?",
+    "options": [
+      "전역 UI 상태(테마, 언어 설정) 관리",
+      "서버 상태(API 응답 데이터)의 캐싱, 재검증, 로딩/에러 상태 처리를 선언적으로 관리한다",
+      "CSS-in-JS 스타일 관리",
+      "폼 유효성 검사"
+    ],
+    "answer": 1,
+    "explanation": "서버 상태는 항상 비동기이고, 캐시 무효화와 재검증이 복잡하다. React Query는 useQuery, useMutation 훅으로 로딩/에러/성공 상태, 캐싱, 백그라운드 재검증, 낙관적 업데이트 등을 간결하게 처리한다. 전역 UI 상태는 Zustand나 Context가 더 적합하다."
+  },
+  {
+    "id": "q11",
+    "question": "AI/ML 대시보드를 개발할 때 Next.js보다 순수 React(Vite)가 더 적합한 경우는?",
+    "options": [
+      "SEO 최적화가 필요한 공개 페이지가 있을 때",
+      "로그인 후에만 접근 가능한 내부 도구이며, SEO가 불필요하고 빠른 개발 속도가 우선일 때",
+      "이미지 최적화가 중요할 때",
+      "서버 사이드 데이터 페칭이 필요할 때"
+    ],
+    "answer": 1,
+    "explanation": "인증된 사용자만 사용하는 내부 ML 모니터링 대시보드는 SEO가 필요 없다. 이 경우 Next.js의 SSR/SSG 이점보다 Vite의 빠른 개발 환경과 단순한 설정이 더 유리할 수 있다. Next.js는 SEO, ISR, 서버 컴포넌트 같은 기능이 필요할 때 진가를 발휘한다."
+  },
+  {
+    "id": "q12",
+    "question": "React의 `StrictMode`가 개발 환경에서 useEffect를 두 번 실행하는 이유는?",
+    "options": [
+      "버그를 확인하기 위해 의도적으로 side effect를 두 번 발생시킨다",
+      "컴포넌트가 마운트-언마운트-재마운트되어 cleanup 함수가 올바르게 구현되었는지 확인하기 위해서다",
+      "서버와 클라이언트 렌더링을 각각 1회씩 실행한다",
+      "이것은 StrictMode 버그이며 프로덕션에서도 동일하게 동작한다"
+    ],
+    "answer": 1,
+    "explanation": "React 18의 StrictMode는 개발 모드에서 컴포넌트를 마운트 → 언마운트 → 재마운트한다. 이를 통해 cleanup 없이 구독/이벤트 리스너를 등록하면 중복이 발생한다는 것을 빠르게 발견할 수 있다. 프로덕션에서는 한 번만 실행된다."
+  }
+]

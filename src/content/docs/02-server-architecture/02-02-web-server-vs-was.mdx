@@ -1,0 +1,177 @@
+---
+title: Web Server vs WAS — 책임 분리의 이유
+description: nginx와 Uvicorn/Gunicorn의 역할 차이를 이해하고, FastAPI가 WAS 계층에서 어떻게 동작하는지 설명합니다.
+sidebar:
+  order: 6
+learning_objectives:
+  - "Web Server(nginx)와 WAS(Uvicorn)의 역할 차이를 설명할 수 있다"
+  - "정적 파일 서빙을 nginx에 맡겨야 하는 이유를 이해한다"
+  - "Gunicorn + Uvicorn worker 조합이 FastAPI에 적합한 이유를 안다"
+prerequisites:
+  - "02-01 챕터 완료"
+estimated_minutes: 20
+references:
+  - title: "nginx Documentation: Beginner's Guide"
+    url: "https://nginx.org/en/docs/beginners_guide.html"
+    accessed: "2026-04-14"
+  - title: "Uvicorn Documentation"
+    url: "https://www.uvicorn.org/"
+    accessed: "2026-04-14"
+  - title: "FastAPI: Server Workers"
+    url: "https://fastapi.tiangolo.com/deployment/server-workers/"
+    accessed: "2026-04-14"
+---
+
+## 두 가지 서버의 역할
+
+웹 서버(Web Server)와 WAS(Web Application Server)는 이름이 비슷해 혼동하기 쉽지만, 처리하는 일이 다릅니다.
+
+```text
+클라이언트
+    │
+    ▼
+┌──────────────────────┐
+│  Web Server (nginx)  │  ← 정적 콘텐츠, 라우팅, SSL
+└──────────┬───────────┘
+           │ 동적 요청만 전달
+           ▼
+┌──────────────────────┐
+│  WAS (Uvicorn)       │  ← 비즈니스 로직, 모델 추론
+│  FastAPI 앱          │
+└──────────────────────┘
+```
+
+| 구분 | Web Server | WAS |
+|------|-----------|-----|
+| 대표 제품 | nginx, Apache | Uvicorn, Gunicorn, Tomcat |
+| 처리 대상 | 정적 파일, 라우팅 | 동적 요청, 비즈니스 로직 |
+| 언어 | C (고성능) | Python, Java, Node.js |
+| 동시성 | 이벤트 루프, 수만 연결 | 프로세스/스레드 모델 |
+| 상태 | Stateless | 상태 보유 가능 |
+
+## Web Server: nginx가 잘하는 것
+
+nginx는 C로 작성되어 메모리 효율이 높고 이벤트 기반으로 동작합니다. 수만 개의 동시 연결을 처리할 수 있습니다.
+
+### 정적 파일 서빙
+
+React 빌드 결과물(`/dist` 디렉토리)을 nginx가 직접 서빙하면 FastAPI까지 요청이 오지 않습니다.
+
+```nginx
+server {
+    location / {
+        root /var/www/html/dist;
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+Python 프로세스를 거치지 않으므로 응답 속도가 훨씬 빠릅니다. 정적 파일은 Python이 처리할 이유가 없습니다.
+
+### 버퍼링과 슬로우 클라이언트 보호
+
+네트워크가 느린 클라이언트가 데이터를 천천히 받아가는 동안, nginx는 WAS로부터 응답을 미리 받아 버퍼에 저장합니다.
+
+```text
+[버퍼링 없을 때]
+WAS ──응답 전송 중── 느린 클라이언트
+↑ WAS 프로세스가 묶여있음 (느린 클라이언트 처리 동안)
+
+[nginx 버퍼링]
+WAS ──빠른 전송──▶ nginx 버퍼 ──천천히──▶ 느린 클라이언트
+↑ WAS는 이미 해제됨
+```
+
+Uvicorn 프로세스가 느린 클라이언트 때문에 점유되는 것을 막아줍니다. 모델 추론 서버처럼 프로세스가 귀한 환경에서 중요합니다.
+
+## WAS: Uvicorn과 Gunicorn
+
+Python FastAPI 애플리케이션은 ASGI(Asynchronous Server Gateway Interface) 서버 위에서 동작합니다.
+
+### WSGI vs ASGI
+
+| 구분 | WSGI | ASGI |
+|------|------|------|
+| 동기/비동기 | 동기만 | 동기 + 비동기 |
+| 대표 서버 | Gunicorn | Uvicorn |
+| 스트리밍 | 제한적 | 네이티브 지원 |
+| WebSocket | 미지원 | 지원 |
+
+FastAPI는 비동기 프레임워크이므로 ASGI 서버인 Uvicorn이 필요합니다.
+
+### Uvicorn 단독 실행
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+개발 환경에서는 충분합니다. 하지만 단일 프로세스라 CPU 코어를 하나만 씁니다.
+
+### Gunicorn + Uvicorn Worker 조합
+
+프로덕션에서는 Gunicorn이 프로세스 관리자 역할을 하고, Uvicorn이 각 워커 프로세스를 담당합니다.
+
+```bash
+gunicorn app.main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000 \
+  --timeout 120      # 모델 추론 시간 여유
+```
+
+```text
+Gunicorn (마스터 프로세스)
+├── Uvicorn Worker 1 (FastAPI 앱)
+├── Uvicorn Worker 2 (FastAPI 앱)
+├── Uvicorn Worker 3 (FastAPI 앱)
+└── Uvicorn Worker 4 (FastAPI 앱)
+```
+
+워커 수 결정 공식은 `2 × CPU_코어 수 + 1`이 일반적입니다. 단, GPU 모델 추론의 경우 모든 워커가 GPU 메모리를 공유하므로 OOM 주의가 필요합니다.
+
+### 모델 서빙 시 워커 설계
+
+```python
+# 각 워커마다 모델을 로드하면 GPU 메모리 낭비
+# 해결책 1: 워커 1개 + async로 동시성 처리
+gunicorn --workers 1 --worker-class uvicorn.workers.UvicornWorker
+
+# 해결책 2: 별도 모델 서버(Triton, TorchServe)에 위임
+@app.post("/predict")
+async def predict(request: PredictRequest):
+    # 모델 서버에 HTTP 요청으로 위임
+    async with httpx.AsyncClient() as client:
+        response = await client.post("http://triton:8001/infer", ...)
+    return response.json()
+```
+
+GPU 메모리는 프로세스 간 공유가 안 되므로, 워커를 늘리면 같은 모델이 메모리에 N번 로드됩니다.
+
+## 책임 분리가 주는 실용적 이점
+
+```text
+[배포 시 역할 분담]
+
+nginx:
+  - /static/* → React 빌드 파일 직접 서빙
+  - /api/*    → Uvicorn으로 프록시
+  - SSL 종료
+  - gzip 압축
+  - 요청 크기 제한 (client_max_body_size)
+
+Uvicorn + FastAPI:
+  - /api/predict → 모델 추론
+  - /api/users   → DB 조회
+  - 인증 미들웨어
+  - 입력 유효성 검사
+```
+
+이 분리 덕분에 nginx 설정 변경(예: SSL 인증서 갱신)은 FastAPI를 재시작하지 않아도 됩니다. FastAPI 코드 변경은 nginx를 건드리지 않습니다.
+
+## 핵심 정리
+
+- Web Server(nginx)는 정적 파일 서빙, SSL 종료, 라우팅을 담당한다. C로 작성되어 수만 동시 연결을 처리한다.
+- WAS(Uvicorn)는 FastAPI 애플리케이션을 실행해 동적 요청과 비즈니스 로직을 처리한다.
+- nginx의 버퍼링은 느린 클라이언트가 Uvicorn 프로세스를 점유하는 것을 방지한다.
+- FastAPI는 ASGI 프레임워크이므로 Uvicorn이 필요하다. 프로덕션에서는 Gunicorn이 Uvicorn 워커를 관리한다.
+- GPU 모델은 워커마다 별도 메모리를 사용하므로, 워커를 늘리면 메모리 사용량이 비례해서 늘어난다. 단일 워커 + 별도 모델 서버 구조를 고려하라.

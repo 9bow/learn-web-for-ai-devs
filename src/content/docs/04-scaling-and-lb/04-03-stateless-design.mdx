@@ -1,0 +1,208 @@
+---
+title: 세션 공유, Sticky Session, Stateless 설계
+description: 세션을 WAS 메모리에 두면 수평 확장이 깨지는 이유, Redis와 JWT로 Stateless하게 만드는 방법, 그리고 ML 추론 워커에 Stateless 원칙이 필요한 이유를 이해한다.
+sidebar:
+  order: 3
+learning_objectives:
+  - "세션을 WAS 메모리에 저장할 때 수평 확장이 왜 실패하는지 설명할 수 있다"
+  - "Redis 세션 스토어와 JWT로 Stateless 아키텍처를 구현하는 방법을 이해한다"
+  - "ML 추론 워커에서 Stateless 원칙이 중요한 이유와 적용 방법을 설명할 수 있다"
+prerequisites:
+  - "04-02 챕터 완료 (L4/L7 로드밸런서)"
+  - "HTTP 세션과 쿠키의 기본 개념"
+estimated_minutes: 20
+references:
+  - title: "Redis — Sessions with Redis"
+    url: "https://redis.io/learn/develop/python/fastapi"
+    accessed: "2026-04-14"
+  - title: "JWT — Introduction to JSON Web Tokens"
+    url: "https://jwt.io/introduction"
+    accessed: "2026-04-14"
+  - title: "The Twelve-Factor App — VI. Processes"
+    url: "https://12factor.net/processes"
+    accessed: "2026-04-14"
+---
+
+## 세션을 메모리에 두면 생기는 문제
+
+사용자가 로그인하면 서버는 세션 정보를 어딘가에 저장합니다. 가장 단순한 방법은 WAS 프로세스의 메모리에 저장하는 것입니다.
+
+```text
+[WAS 메모리 세션 - 단일 서버]
+사용자 → 서버A (세션: {user_id: 42, role: "admin"})
+  → 다음 요청도 서버A로 가면 세션 유효 ✓
+```
+
+단일 서버에서는 잘 동작합니다. 문제는 수평 확장(Scale Out)할 때 터집니다.
+
+```text
+[WAS 메모리 세션 - 수평 확장 시]
+
+로그인 요청 → LB → 서버A (세션 저장: user_id=42)
+              ↓
+다음 API 요청 → LB → 서버B (세션 없음!) → 401 Unauthorized ✗
+              ↓
+또 다른 요청 → LB → 서버C (세션 없음!) → 401 Unauthorized ✗
+```
+
+로드밸런서가 라운드 로빈으로 요청을 분산하면, 로그인한 서버A가 아닌 서버B나 서버C로 요청이 가게 됩니다. 세션이 서버A 메모리에만 있으므로 인증 실패가 발생합니다.
+
+## Sticky Session: 임시방편과 그 한계
+
+Sticky Session(세션 고정)은 특정 사용자의 요청을 항상 같은 서버로 보내는 방식입니다.
+
+```text
+[Sticky Session]
+사용자42 → LB → 항상 서버A (쿠키나 IP 해시로 고정)
+사용자99 → LB → 항상 서버B
+```
+
+단기적으로는 동작하지만 여러 문제를 낳습니다.
+
+| 문제 | 설명 |
+|------|------|
+| **불균형 부하** | 인기 사용자가 몰린 서버에 과부하 발생 |
+| **서버 장애** | 서버A가 죽으면 서버A의 사용자 세션 전체 소실 |
+| **배포 어려움** | 특정 서버를 재시작할 때 해당 사용자 로그아웃 |
+| **오토스케일 비효율** | 새 서버를 추가해도 기존 사용자는 분산 안 됨 |
+
+Sticky Session은 Stateless 설계의 우회책일 뿐, 근본 해결책이 아닙니다.
+
+## Redis로 세션 외부화
+
+세션을 WAS 메모리 대신 외부 Redis에 저장하면 어떤 WAS 인스턴스가 요청을 받아도 같은 세션 데이터를 읽을 수 있습니다.
+
+```text
+[Redis 세션 스토어]
+
+사용자 → LB → 서버A → Redis (세션 저장: session:abc → {user_id:42})
+사용자 → LB → 서버B → Redis (세션 조회: session:abc → {user_id:42} ✓)
+사용자 → LB → 서버C → Redis (세션 조회: session:abc → {user_id:42} ✓)
+```
+
+FastAPI에서 Redis 세션을 구현하는 예시입니다.
+
+```python
+import redis.asyncio as redis
+import uuid
+import json
+from fastapi import Cookie, Response
+
+redis_client = redis.from_url("redis://redis-host:6379", decode_responses=True)
+SESSION_TTL = 3600  # 1시간
+
+async def create_session(response: Response, user_id: int) -> str:
+    session_id = str(uuid.uuid4())
+    session_data = {"user_id": user_id}
+    await redis_client.setex(
+        f"session:{session_id}",
+        SESSION_TTL,
+        json.dumps(session_data),
+    )
+    response.set_cookie("session_id", session_id, httponly=True, secure=True)
+    return session_id
+
+async def get_session(session_id: str = Cookie(None)) -> dict | None:
+    if not session_id:
+        return None
+    raw = await redis_client.get(f"session:{session_id}")
+    return json.loads(raw) if raw else None
+```
+
+Redis는 인메모리 데이터 구조 저장소라 세션 조회가 수 밀리초 이내에 완료됩니다. TTL(Time To Live)로 만료도 자동 처리합니다.
+
+## JWT: 서버 저장 없는 Stateless 인증
+
+JWT(JSON Web Token)는 세션 저장 자체를 없애는 접근입니다. 인증 정보를 서명된 토큰에 담아 클라이언트에 주고, 클라이언트가 매 요청마다 토큰을 전송합니다.
+
+```text
+[JWT 흐름]
+
+1. 로그인 → 서버 → JWT 생성 후 클라이언트에 전달
+   JWT payload: {user_id: 42, role: "admin", exp: 1234567890}
+   JWT signature: HMAC-SHA256(header.payload, SECRET_KEY)
+
+2. API 요청 → Authorization: Bearer <JWT>
+   → 서버는 서명 검증만 (DB/Redis 조회 없음)
+   → 유효하면 payload에서 user_id 추출
+```
+
+```python
+import jwt
+from datetime import datetime, timedelta, timezone
+import os
+
+SECRET_KEY = os.environ["JWT_SECRET"]
+ALGORITHM = "HS256"
+
+def create_access_token(user_id: int) -> str:
+    payload = {
+        "sub": str(user_id),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_token(token: str) -> dict:
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+```
+
+JWT는 서버 상태가 전혀 없습니다. 서버가 100대로 늘어도 각 서버가 동일한 `SECRET_KEY`로 서명을 검증할 수 있습니다.
+
+| 방식 | 서버 상태 | 토큰 무효화 | 확장성 |
+|------|----------|------------|--------|
+| 메모리 세션 | 있음 (WAS 메모리) | 즉시 가능 | 불가 |
+| Redis 세션 | 있음 (Redis) | 즉시 가능 | 가능 |
+| JWT | 없음 | 만료 전까지 어려움 | 완전 |
+
+JWT의 약점은 토큰 즉시 무효화가 어렵다는 점입니다. 로그아웃 구현이나 탈취된 토큰 차단을 위해 Redis에 블랙리스트를 관리하는 하이브리드 방식을 쓰기도 합니다.
+
+## ML 추론 워커에서의 Stateless 원칙
+
+AI 서비스의 추론 워커도 Stateless를 지켜야 수평 확장이 가능합니다.
+
+```text
+[Stateful 추론 워커 - 문제]
+워커A: 대화 이력 메모리에 유지 (session: user42 → [msg1, msg2])
+워커B: 해당 대화 이력 없음
+
+사용자 3번째 메시지 → LB → 워커B → "이전 대화가 없습니다" ✗
+```
+
+```text
+[Stateless 추론 워커 - 해결]
+모든 상태를 외부 저장소에:
+  - 대화 이력 → Redis 또는 PostgreSQL
+  - 모델 가중치 → 공유 스토리지 또는 각 워커 로컬 (읽기 전용)
+  - 임시 계산 결과 → Redis 캐시
+
+워커A, B, C 중 어느 워커가 요청을 받아도 Redis에서 이력을 읽어 추론 가능
+```
+
+```python
+async def generate_response(session_id: str, user_message: str) -> str:
+    # 상태를 외부에서 조회
+    history = await redis_client.lrange(f"history:{session_id}", 0, -1)
+    messages = [json.loads(m) for m in history]
+
+    # 추론 (워커 메모리에 상태 없음)
+    reply = await model.generate(messages + [{"role": "user", "content": user_message}])
+
+    # 상태를 외부에 저장
+    await redis_client.rpush(
+        f"history:{session_id}",
+        json.dumps({"role": "assistant", "content": reply}),
+    )
+    await redis_client.expire(f"history:{session_id}", 3600)
+
+    return reply
+```
+
+Stateless 추론 워커는 오토스케일링과도 궁합이 좋습니다. 트래픽이 급증하면 워커를 즉시 추가하고, 트래픽이 줄면 제거합니다. 어떤 워커도 대체 불가능한 상태를 갖지 않으므로 자유롭게 추가·제거할 수 있습니다.
+
+## 핵심 정리
+
+- WAS 메모리에 세션을 저장하면 수평 확장 시 다른 인스턴스에서 세션을 찾지 못해 인증이 실패한다.
+- Sticky Session은 임시방편이다. 서버 장애 시 세션 소실, 부하 불균형, 오토스케일 비효율 문제가 남는다.
+- Redis 세션 외부화는 WAS 상태를 없애고 어떤 인스턴스도 동일한 세션을 조회할 수 있게 한다.
+- JWT는 서명 검증만으로 인증하므로 서버 상태가 전혀 없다. 완전한 Stateless이지만 즉시 무효화가 어렵다.
+- ML 추론 워커도 대화 이력을 Redis나 DB에 저장해 Stateless를 유지해야 오토스케일링이 가능하다.

@@ -1,0 +1,122 @@
+[
+  {
+    "id": "q1",
+    "question": "SQLite가 프로덕션 ML 서비스에서 적합한 사용 사례는?",
+    "options": [
+      "초당 수천 건의 쓰기 요청이 발생하는 이커머스 결제 시스템",
+      "여러 서버가 동시에 접근해야 하는 공유 데이터베이스",
+      "단일 서버에서 운영되며 읽기가 많고 쓰기가 적은 AI 실험 결과 저장 또는 소규모 API 서비스",
+      "실시간 멀티플레이어 게임의 세션 관리"
+    ],
+    "answer": 2,
+    "explanation": "SQLite는 파일 기반 DB로 설치가 필요 없고 운영이 간단하다. 단일 서버에서 읽기 위주 워크로드에 매우 적합하다. 하지만 동시 쓰기 성능에 제한이 있고 파일 하나이므로 여러 서버가 공유할 수 없다. 개발, 프로토타입, 소규모 서비스에 이상적이다."
+  },
+  {
+    "id": "q2",
+    "question": "SQLAlchemy ORM에서 `relationship()`과 `ForeignKey()`의 역할 차이는?",
+    "options": [
+      "둘 다 동일한 역할을 하며 중복으로 작성한다",
+      "ForeignKey()는 DB 스키마 레벨의 외래키 제약을 정의하고, relationship()은 Python 객체 레벨에서 관련 객체에 접근할 수 있는 속성을 제공한다",
+      "relationship()은 DB 마이그레이션에 사용되고 ForeignKey()는 쿼리에 사용된다",
+      "ForeignKey()는 SQLite에서만 동작하고 relationship()은 PostgreSQL에서만 동작한다"
+    ],
+    "answer": 1,
+    "explanation": "ForeignKey('users.id')는 실제 DB 테이블에 FK 제약을 만든다. relationship('User')는 Python 코드에서 `todo.user`처럼 관련 객체를 직접 접근할 수 있게 해주는 ORM 수준의 편의 속성이다. 둘 다 있어야 ORM 관계가 올바르게 동작한다."
+  },
+  {
+    "id": "q3",
+    "question": "Alembic에서 `alembic revision --autogenerate -m 'add_priority'` 명령의 의미는?",
+    "options": [
+      "마이그레이션을 즉시 DB에 적용한다",
+      "SQLAlchemy 모델과 현재 DB 스키마를 비교해 변경 사항을 담은 새 마이그레이션 파일을 자동 생성한다",
+      "모든 마이그레이션을 롤백한다",
+      "DB를 백업한다"
+    ],
+    "answer": 1,
+    "explanation": "--autogenerate 플래그는 SQLAlchemy 모델 정의와 실제 DB 스키마를 비교해 차이를 자동으로 감지하고 마이그레이션 파일을 생성한다. 생성된 파일을 검토한 후 `alembic upgrade head`로 실제 DB에 적용한다. 자동 생성이 모든 변경을 감지하지는 않으므로 생성된 파일을 반드시 확인해야 한다."
+  },
+  {
+    "id": "q4",
+    "question": "SQLAlchemy async 세션에서 `await session.commit()` 대신 `await session.flush()`를 사용하는 상황은?",
+    "options": [
+      "트랜잭션을 영구적으로 저장할 때",
+      "세션에 추가된 변경사항을 DB에 반영하되 트랜잭션은 유지해, 같은 트랜잭션 내에서 새로 생성된 ID에 접근해야 할 때",
+      "트랜잭션을 롤백할 때",
+      "DB 연결을 닫을 때"
+    ],
+    "answer": 1,
+    "explanation": "flush()는 세션의 변경사항을 DB에 전송하지만 트랜잭션은 열려 있다. 이후 오류가 발생하면 롤백할 수 있다. commit()은 트랜잭션을 영구 확정한다. 한 트랜잭션에서 INSERT 후 생성된 ID를 읽어야 할 때 flush() → 접근 → commit() 패턴을 사용한다."
+  },
+  {
+    "id": "q5",
+    "question": "SQLAlchemy에서 lazy loading의 문제점은?",
+    "options": [
+      "초기 쿼리 속도가 느려진다",
+      "관련 객체에 접근할 때마다 추가 DB 쿼리가 발생해(N+1 문제) 전체 쿼리 수가 기하급수적으로 늘어난다",
+      "메모리에 모든 데이터를 로드한다",
+      "트랜잭션을 자동으로 커밋한다"
+    ],
+    "answer": 1,
+    "explanation": "lazy loading은 관련 객체에 처음 접근할 때 DB 쿼리를 발생시킨다. 10개의 Todo를 로드하고 각각의 tags에 접근하면 1 + 10 = 11번의 쿼리가 실행된다. selectinload() 또는 joinedload()로 미리 관련 객체를 한 번에 로드하면 N+1 문제를 해결할 수 있다."
+  },
+  {
+    "id": "q6",
+    "question": "Alembic 마이그레이션에서 `downgrade()` 함수를 반드시 구현해야 하는 이유는?",
+    "options": [
+      "Alembic이 실행 시 downgrade 함수를 검증하기 때문이다",
+      "프로덕션에서 문제가 발생했을 때 이전 버전으로 신속하게 롤백할 수 있어야 하기 때문이다",
+      "upgrade 함수가 실패하면 자동으로 downgrade가 호출되기 때문이다",
+      "downgrade를 구현하지 않으면 마이그레이션 파일이 생성되지 않는다"
+    ],
+    "answer": 1,
+    "explanation": "downgrade 없이 배포했다가 버그가 발견되면 DB 스키마를 수동으로 원복해야 한다. `alembic downgrade -1`로 최근 마이그레이션을 하나씩 되돌릴 수 있어야 빠른 롤백이 가능하다. 특히 컬럼 삭제나 테이블 이름 변경 같은 파괴적 마이그레이션에서 중요하다."
+  },
+  {
+    "id": "q7",
+    "question": "SQLite에서 `PRAGMA journal_mode=WAL;` 설정의 효과는?",
+    "options": [
+      "DB 암호화를 활성화한다",
+      "동시 읽기와 쓰기를 개선해, 쓰기가 진행 중일 때도 읽기 잠금 없이 접근 가능하게 한다",
+      "자동 백업을 활성화한다",
+      "인덱스를 자동으로 생성한다"
+    ],
+    "answer": 1,
+    "explanation": "WAL(Write-Ahead Logging) 모드에서는 쓰기가 별도 WAL 파일에 기록되므로, 쓰기 중에도 읽기가 이전 스냅샷으로 진행된다. 기본 Journal 모드는 쓰기 시 전체 DB에 잠금이 걸려 읽기도 차단된다. FastAPI처럼 읽기/쓰기가 동시에 발생하는 환경에서 처리량이 크게 개선된다."
+  },
+  {
+    "id": "q8",
+    "question": "SQLite에서 PostgreSQL로 마이그레이션할 때 코드 변경 최소화를 위해 ORM을 사용하는 이유는?",
+    "options": [
+      "PostgreSQL이 SQLite보다 빠르기 때문이다",
+      "SQLAlchemy ORM이 DB 방언(dialect)을 추상화하므로 연결 문자열(DATABASE_URL)만 변경하면 쿼리 코드 수정 없이 DB를 교체할 수 있다",
+      "ORM이 마이그레이션을 자동으로 처리하기 때문이다",
+      "PostgreSQL은 raw SQL을 지원하지 않기 때문이다"
+    ],
+    "answer": 1,
+    "explanation": "SQLAlchemy ORM은 SQLite, PostgreSQL, MySQL 등 다양한 DB를 동일한 Python 코드로 다룰 수 있게 추상화한다. `DATABASE_URL=postgresql+asyncpg://...`로 연결 문자열만 바꾸면 대부분의 ORM 코드를 그대로 사용할 수 있다. JSONB, 배열 타입 같은 PostgreSQL 특화 기능만 별도로 처리하면 된다."
+  },
+  {
+    "id": "q9",
+    "question": "FastAPI에서 `get_db()` 의존성 함수를 `yield`로 구현하는 이유는?",
+    "options": [
+      "yield가 async/await보다 빠르기 때문이다",
+      "요청 처리가 끝나면 자동으로 DB 세션을 닫고 트랜잭션을 정리하는 컨텍스트 매니저 패턴을 구현하기 위해서다",
+      "여러 DB 세션을 동시에 유지하기 위해서다",
+      "DB 연결 풀을 초기화하기 위해서다"
+    ],
+    "answer": 1,
+    "explanation": "`yield`를 사용하면 FastAPI가 요청 처리 후 yield 이후 코드(세션 close, 예외 시 rollback)를 자동으로 실행한다. try-finally 패턴으로 요청 성공/실패 모두에서 세션이 반드시 정리되도록 보장한다. 이는 연결 풀 고갈과 트랜잭션 누수를 방지한다."
+  },
+  {
+    "id": "q10",
+    "question": "SQLAlchemy에서 복합 인덱스(Composite Index)를 사용하는 적합한 상황은?",
+    "options": [
+      "단일 컬럼으로 자주 조회할 때",
+      "두 컬럼을 함께 WHERE 조건이나 ORDER BY에 사용하는 쿼리가 많을 때 — 예: user_id로 필터 후 created_at으로 정렬",
+      "테이블의 모든 컬럼을 인덱싱할 때",
+      "쓰기 성능을 높여야 할 때"
+    ],
+    "answer": 1,
+    "explanation": "복합 인덱스는 두 컬럼을 함께 검색하는 쿼리를 최적화한다. `WHERE user_id = ? ORDER BY created_at DESC` 같은 쿼리에 (user_id, created_at) 복합 인덱스를 만들면 단일 인덱스보다 훨씬 효율적이다. 다만 인덱스는 쓰기 성능을 낮추므로 실제 쿼리 패턴에 맞게 선택적으로 생성한다."
+  }
+]

@@ -1,0 +1,195 @@
+---
+title: 실전 토폴로지 (AI 추론 서비스 예시)
+description: DNS부터 CDN, ALB, nginx, FastAPI 워커, GPU 서버, DB와 Redis, 벡터 DB까지 이어지는 AI 추론 서비스의 전체 아키텍처 토폴로지를 이해한다.
+sidebar:
+  order: 4
+learning_objectives:
+  - "AI 추론 서비스의 전체 요청 흐름을 계층별로 설명할 수 있다"
+  - "GPU 오토스케일링 전략과 장시간 추론 요청을 위한 큐 패턴을 이해한다"
+  - "VectorDB, Redis, PostgreSQL의 역할을 구분하고 각 계층에서의 위치를 파악한다"
+prerequisites:
+  - "04-01 ~ 04-03 챕터 완료"
+  - "AWS 기본 서비스 (EC2, ALB) 개요 수준의 이해"
+estimated_minutes: 20
+references:
+  - title: "AWS — Auto Scaling for EC2"
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html"
+    accessed: "2026-04-14"
+  - title: "AWS — Application Load Balancer"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html"
+    accessed: "2026-04-14"
+  - title: "Celery — Distributed Task Queue"
+    url: "https://docs.celeryq.dev/en/stable/getting-started/introduction.html"
+    accessed: "2026-04-14"
+---
+
+## 전체 아키텍처 토폴로지
+
+다음은 AI 추론 서비스의 프로덕션 수준 전체 구조입니다.
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                        사용자                           │
+└───────────────────────────┬─────────────────────────────┘
+                            │ HTTPS
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│                    DNS (Route 53)                        │
+│          example.com → ALB 도메인 CNAME                 │
+└───────────────────────────┬─────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│             CDN (CloudFront / Cloudflare)                │
+│  정적 에셋 캐싱 (JS/CSS/이미지), Edge에서 서빙           │
+│  동적 /api/* 요청은 오리진(ALB)으로 통과                │
+└────────────────┬──────────────────────────┬─────────────┘
+                 │ 정적 캐시 히트           │ 캐시 미스 / API
+                 ▼                          ▼
+         [Edge 서버 응답]   ┌──────────────────────────────┐
+                            │   ALB (Application LB, L7)   │
+                            │   SSL 종료, 헬스체크           │
+                            └───────┬──────────────────────┘
+                                    │
+                   ┌────────────────┼────────────────┐
+                   ▼                ▼                ▼
+        ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
+        │ nginx + FastAPI  │ │nginx+FastAPI│ │ nginx + FastAPI  │
+        │   워커 인스턴스1 │ │  워커2      │ │   워커3          │
+        │  (CPU, t3.large) │ │ (CPU)       │ │  (CPU)          │
+        └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
+                 │                 │                  │
+                 └────────┬────────┘──────────────────┘
+                          │ 짧은 추론 (동기 처리)
+                          │ 긴 추론 (큐로 전달)
+                          ▼
+        ┌─────────────────────────────────────────────┐
+        │         메시지 큐 (Redis / SQS)              │
+        │   장시간 추론 작업 대기열                   │
+        └──────────────┬──────────────────────────────┘
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+ │ GPU 워커 1   │ │ GPU 워커 2   │ │ GPU 워커 N   │
+ │ g5.xlarge    │ │ g5.xlarge    │ │ (오토스케일) │
+ │ A10G GPU     │ │ A10G GPU     │ │              │
+ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+        └────────────────┼─────────────────┘
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+ │ PostgreSQL   │ │    Redis     │ │  VectorDB    │
+ │ RDS Multi-AZ │ │ ElastiCache  │ │ (Pinecone /  │
+ │ 사용자·로그  │ │ 세션·캐시   │ │  pgvector)   │
+ └──────────────┘ └──────────────┘ └──────────────┘
+```
+
+## 계층별 역할 상세
+
+### DNS와 CDN
+
+DNS(Route 53)는 도메인을 ALB의 DNS 이름으로 연결합니다. ALB IP는 동적으로 바뀔 수 있으므로 IP가 아닌 ALB DNS 이름으로 CNAME을 설정합니다.
+
+CDN(CloudFront)은 전 세계 엣지 서버에 정적 에셋을 캐싱합니다. 서울 사용자는 서울 엣지에서 JS/CSS를 받습니다. 미국 원본 서버까지 왕복하지 않아도 됩니다. `/api/*` 요청은 CDN이 캐싱하지 않고 ALB로 통과시킵니다.
+
+### ALB (Application Load Balancer)
+
+ALB는 L7 로드밸런서입니다. SSL 인증서를 여기서 관리합니다. 백엔드 FastAPI 워커들의 헬스체크를 수행해 비정상 인스턴스로는 요청을 보내지 않습니다.
+
+```text
+ALB 라우팅 규칙 예시:
+  Host: example.com, Path: /api/* → FastAPI 타겟 그룹
+  Host: example.com, Path: /*    → 정적 파일 타겟 그룹 (또는 S3)
+```
+
+### FastAPI 워커 (CPU 인스턴스)
+
+입력 검증, 인증, 간단한 비즈니스 로직을 처리합니다. 짧은 추론(수초 이내)은 직접 GPU 워커 API를 호출하고 응답을 기다립니다. 긴 추론(수십 초 이상)은 작업을 큐에 넣고 즉시 `job_id`를 반환합니다.
+
+```python
+@app.post("/api/inference")
+async def run_inference(request: InferenceRequest, background_tasks: BackgroundTasks):
+    if request.estimated_seconds < 10:
+        # 짧은 추론: 동기 처리
+        result = await gpu_worker_client.infer(request)
+        return {"result": result}
+    else:
+        # 긴 추론: 큐 전달
+        job_id = await queue.enqueue(request.model_dump())
+        return {"job_id": job_id, "status": "queued"}
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    status = await redis_client.get(f"job:{job_id}:status")
+    result = await redis_client.get(f"job:{job_id}:result")
+    return {"status": status, "result": result}
+```
+
+### GPU 워커와 오토스케일링
+
+GPU 인스턴스는 비쌉니다. 항상 최대 수를 켜두면 비용이 폭증합니다. 큐의 대기 메시지 수를 지표로 오토스케일링합니다.
+
+```text
+[GPU 오토스케일링 전략]
+
+지표: Redis 큐 대기 메시지 수
+  > 10개  → GPU 워커 +1 (스케일 아웃)
+  < 2개   → GPU 워커 -1 (스케일 인, 최소 1대 유지)
+
+GPU 인스턴스 시작 시간: ~3분 (AMI에 모델 미리 로드)
+  → 시작 후 큐에서 작업 폴링 시작
+
+스팟 인스턴스 활용:
+  - On-Demand 1대 (최소 보장)
+  - Spot 나머지 (비용 70% 절감, 중단 가능성 처리 필요)
+```
+
+모델 가중치 로딩 시간을 줄이려면 GPU 인스턴스용 커스텀 AMI에 모델을 미리 포함시킵니다. 인스턴스 시작 시 모델 다운로드가 필요 없어 준비 시간이 수분에서 수십 초로 줄어듭니다.
+
+### 데이터 계층
+
+```text
+PostgreSQL (RDS Multi-AZ):
+  - 사용자 계정, 구독, API 키
+  - 추론 요청 이력 및 비용 추적
+  - Multi-AZ로 장애 시 자동 페일오버
+
+Redis (ElastiCache):
+  - 세션 토큰
+  - 중복 요청 캐시 (동일 입력 → 캐시된 결과 반환)
+  - 작업 큐 (List 자료구조)
+  - 결과 임시 저장 (job_id → result, TTL 1시간)
+
+VectorDB (pgvector 또는 Pinecone):
+  - 문서 임베딩 저장 (RAG 시스템)
+  - 코사인 유사도 기반 검색
+  - pgvector: PostgreSQL 확장, 기존 RDS에서 운영 가능
+  - Pinecone: 관리형 서비스, 대규모에서 운영 부담 없음
+```
+
+## 장시간 추론을 위한 큐 패턴
+
+HTTP 요청은 일반적으로 30~60초 타임아웃이 있습니다. LLM 응답 생성, 이미지 생성, 영상 처리처럼 수분이 걸리는 작업은 동기 HTTP로 처리할 수 없습니다.
+
+```text
+[큐 패턴 흐름]
+
+클라이언트 → POST /api/jobs → {job_id: "abc123"} (즉시 반환)
+클라이언트 → GET /api/jobs/abc123 → {status: "processing"} (폴링)
+클라이언트 → GET /api/jobs/abc123 → {status: "done", result: ...}
+
+또는 WebSocket / SSE로 완료 알림:
+클라이언트 ← SSE stream ← 작업 완료 이벤트
+```
+
+폴링보다 SSE(Server-Sent Events)나 WebSocket이 실시간성이 좋지만, 구현 복잡도가 높습니다. 실제 서비스에서는 추론 시간이 5초 이내면 동기, 그 이상이면 큐 패턴을 사용하는 혼합 전략이 현실적입니다.
+
+## 핵심 정리
+
+- AI 추론 서비스의 요청 흐름은 DNS → CDN → ALB → nginx/FastAPI 워커 → GPU 워커 → DB/Redis/VectorDB 순이다.
+- CDN은 정적 에셋을 엣지에서 서빙하고, ALB는 FastAPI 워커들에 L7 로드밸런싱과 SSL 종료를 담당한다.
+- GPU 워커는 큐(Redis/SQS) 대기 메시지 수를 기반으로 오토스케일링한다. 스팟 인스턴스로 비용을 70% 절감할 수 있다.
+- 장시간 추론(수분)은 동기 HTTP로 처리할 수 없다. 큐에 작업을 넣고 `job_id`를 반환한 뒤 클라이언트가 폴링하거나 SSE로 완료를 수신한다.
+- 데이터 계층은 역할별로 분리된다. 구조화 데이터는 PostgreSQL, 세션·캐시·큐는 Redis, 임베딩 검색은 VectorDB가 담당한다.

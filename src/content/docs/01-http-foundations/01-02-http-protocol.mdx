@@ -1,0 +1,209 @@
+---
+title: HTTP 프로토콜의 구조
+description: HTTP 요청과 응답의 구성 요소, 메서드별 용도, 상태 코드 분류를 AI 서빙 맥락에서 설명합니다.
+sidebar:
+  order: 2
+learning_objectives:
+  - "HTTP 요청과 응답의 각 구성 요소(요청 라인, 헤더, 바디)를 설명할 수 있다"
+  - "GET/POST/PUT/PATCH/DELETE 메서드를 언제 어떻게 사용하는지 판단할 수 있다"
+  - "2xx/3xx/4xx/5xx 상태 코드의 의미와 모델 서빙에서 자주 마주치는 코드를 이해한다"
+prerequisites:
+  - "01-01 챕터 완료"
+  - "curl 또는 Postman 사용 경험 (선택)"
+estimated_minutes: 25
+references:
+  - title: "MDN Web Docs: HTTP Messages"
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages"
+    accessed: "2026-04-14"
+  - title: "RFC 9110: HTTP Semantics"
+    url: "https://datatracker.ietf.org/doc/html/rfc9110"
+    accessed: "2026-04-14"
+  - title: "MDN Web Docs: HTTP response status codes"
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status"
+    accessed: "2026-04-14"
+---
+
+## HTTP는 텍스트 기반 프로토콜이다
+
+HTTP(HyperText Transfer Protocol)는 클라이언트와 서버가 주고받는 메시지의 형식을 정의합니다. 핵심은 단순합니다. 클라이언트가 **요청(Request)** 을 보내면 서버가 **응답(Response)** 을 돌려줍니다.
+
+PyTorch의 forward pass와 비교하면 이렇습니다.
+
+```text
+[PyTorch]  input_tensor → model.forward() → output_tensor
+[HTTP]     Request      → 서버 처리       → Response
+```
+
+구조를 알면 FastAPI가 자동으로 처리해주는 것들이 무엇인지, 문제가 생겼을 때 어디를 봐야 하는지 판단할 수 있습니다.
+
+## HTTP 요청의 구조
+
+실제 HTTP 요청을 텍스트로 보면 다음과 같습니다.
+
+```http
+POST /predict HTTP/1.1
+Host: api.mymodel.com
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+Content-Length: 45
+
+{"text": "이 리뷰는 긍정적인가요?"}
+```
+
+세 부분으로 나뉩니다.
+
+### 요청 라인 (Request Line)
+
+첫 번째 줄입니다. `메서드 경로 HTTP버전` 형식입니다.
+
+- **메서드**: 어떤 작업을 할지 (`POST`)
+- **경로(Path)**: 어떤 리소스를 대상으로 할지 (`/predict`)
+- **HTTP 버전**: 프로토콜 버전 (`HTTP/1.1`)
+
+### 헤더 (Headers)
+
+요청에 대한 메타데이터입니다. 키-값 쌍으로 구성됩니다.
+
+| 헤더 | 역할 | 예시 |
+|------|------|------|
+| `Host` | 대상 서버 도메인 | `api.mymodel.com` |
+| `Content-Type` | 바디의 데이터 형식 | `application/json` |
+| `Authorization` | 인증 토큰 | `Bearer hf_xxx` |
+| `Content-Length` | 바디의 바이트 크기 | `45` |
+| `Accept` | 원하는 응답 형식 | `application/json` |
+
+### 바디 (Body)
+
+실제 데이터가 담기는 곳입니다. GET 요청에는 보통 없고, POST/PUT 요청에는 JSON, 이미지, 텍스트 등이 들어갑니다.
+
+## HTTP 응답의 구조
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Request-Id: abc-123
+Content-Length: 38
+
+{"prediction": "긍정", "confidence": 0.94}
+```
+
+### 상태 라인 (Status Line)
+
+`HTTP버전 상태코드 상태메시지` 형식입니다. `200 OK`가 가장 흔합니다.
+
+### 응답 헤더
+
+서버가 응답에 대한 정보를 전달합니다. `Content-Type`으로 클라이언트가 바디를 어떻게 파싱할지 알 수 있습니다.
+
+### 응답 바디
+
+서버가 돌려주는 실제 데이터입니다.
+
+## HTTP 메서드: 어떤 작업을 할지 표현한다
+
+HTTP 메서드는 데이터베이스의 CRUD와 대응됩니다.
+
+| 메서드 | 의미 | CRUD | 바디 | 멱등성 |
+|--------|------|------|------|--------|
+| `GET` | 조회 | Read | 없음 | O |
+| `POST` | 생성/처리 | Create | 있음 | X |
+| `PUT` | 전체 교체 | Update | 있음 | O |
+| `PATCH` | 부분 수정 | Update | 있음 | 조건부 |
+| `DELETE` | 삭제 | Delete | 없음 | O |
+
+**멱등성(Idempotency)** 이란 같은 요청을 여러 번 보내도 결과가 동일한 성질입니다. GET은 몇 번 조회해도 데이터가 변하지 않으므로 멱등합니다. POST는 호출할 때마다 새 레코드가 생성될 수 있어 멱등하지 않습니다.
+
+### 모델 서빙에서의 메서드 선택
+
+```python
+# 추론 요청: POST를 써야 한다
+# 이유: 입력 데이터를 바디에 담아야 하고,
+#       매 호출이 독립적인 처리이기 때문
+@app.post("/predict")
+async def predict(request: PredictRequest):
+    ...
+
+# 모델 정보 조회: GET
+@app.get("/models/{model_id}")
+async def get_model_info(model_id: str):
+    ...
+
+# 모델 설정 업데이트: PUT (전체) 또는 PATCH (부분)
+@app.patch("/models/{model_id}/config")
+async def update_config(model_id: str, config: ConfigUpdate):
+    ...
+```
+
+추론 엔드포인트에 GET을 쓰면 안 되는 이유는, 입력 데이터를 URL 쿼리 파라미터에 담아야 해서 길이 제한이 있고 이미지 같은 바이너리 데이터를 전송할 수 없기 때문입니다.
+
+## 상태 코드: 결과를 숫자로 표현한다
+
+상태 코드는 세 자리 숫자로 응답의 성공/실패 여부와 이유를 전달합니다.
+
+### 2xx: 성공
+
+| 코드 | 의미 | 사용 시점 |
+|------|------|-----------|
+| `200 OK` | 성공 | GET 조회, POST 처리 완료 |
+| `201 Created` | 생성 성공 | 새 리소스 생성 후 |
+| `202 Accepted` | 수락됨 (처리 중) | 비동기 추론 요청 접수 |
+| `204 No Content` | 성공, 바디 없음 | DELETE 완료 후 |
+
+모델 추론이 오래 걸릴 때 `202 Accepted`를 반환하고 나중에 결과를 폴링(polling)하는 패턴을 Replicate가 사용합니다.
+
+### 3xx: 리다이렉션
+
+| 코드 | 의미 |
+|------|------|
+| `301 Moved Permanently` | URL이 영구적으로 변경됨 |
+| `302 Found` | 임시 리다이렉트 |
+| `304 Not Modified` | 캐시된 버전 사용 가능 |
+
+### 4xx: 클라이언트 오류
+
+요청을 보낸 쪽의 문제입니다.
+
+| 코드 | 의미 | ML 서빙 예시 |
+|------|------|-------------|
+| `400 Bad Request` | 잘못된 요청 형식 | JSON 파싱 실패, 필드 누락 |
+| `401 Unauthorized` | 인증 필요 | API 키 없음 |
+| `403 Forbidden` | 권한 없음 | 다른 사용자의 모델 접근 시도 |
+| `404 Not Found` | 리소스 없음 | 존재하지 않는 model_id |
+| `422 Unprocessable Entity` | 유효성 검사 실패 | FastAPI 기본 오류 |
+| `429 Too Many Requests` | 요청 한도 초과 | API Rate Limit 초과 |
+
+FastAPI에서 Pydantic 유효성 검사가 실패하면 자동으로 `422`를 반환합니다. OpenAI API를 쓰다 `429`를 받았다면 분당 요청 수를 초과한 것입니다.
+
+### 5xx: 서버 오류
+
+서버 쪽의 문제입니다.
+
+| 코드 | 의미 | ML 서빙 예시 |
+|------|------|-------------|
+| `500 Internal Server Error` | 예기치 않은 서버 오류 | 모델 forward pass 중 예외 |
+| `502 Bad Gateway` | 게이트웨이 오류 | nginx → FastAPI 연결 실패 |
+| `503 Service Unavailable` | 서비스 사용 불가 | GPU OOM, 모델 로딩 중 |
+| `504 Gateway Timeout` | 게이트웨이 타임아웃 | 추론이 너무 오래 걸림 |
+
+LLM 추론처럼 시간이 오래 걸리는 작업에서 `504`가 자주 발생합니다. nginx의 `proxy_read_timeout` 설정이 너무 짧을 때입니다.
+
+## curl로 직접 확인하기
+
+```bash
+# POST /predict 요청 보내기
+curl -X POST https://api.mymodel.com/predict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer my-api-key" \
+  -d '{"text": "이 리뷰는 긍정적인가요?"}' \
+  -v  # 헤더 포함 전체 출력
+```
+
+`-v` 플래그를 붙이면 요청 헤더, 응답 헤더, 상태 코드를 모두 볼 수 있습니다. 디버깅할 때 매우 유용합니다.
+
+## 핵심 정리
+
+- HTTP 요청은 요청 라인(메서드+경로), 헤더(메타데이터), 바디(데이터)로 구성된다.
+- HTTP 응답은 상태 라인(상태 코드), 헤더, 바디로 구성된다.
+- 추론 요청에는 POST를 써야 한다. 입력 데이터를 바디에 담을 수 있고 바이너리 전송도 가능하기 때문이다.
+- 4xx는 클라이언트 잘못, 5xx는 서버 잘못이다. `422`는 FastAPI 유효성 검사 실패, `504`는 추론 타임아웃을 의미한다.
+- curl에 `-v` 옵션을 붙이면 원시 HTTP 메시지를 볼 수 있어 디버깅에 유용하다.

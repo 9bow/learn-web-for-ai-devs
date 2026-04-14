@@ -1,0 +1,144 @@
+---
+title: 왜 별도의 Frontend 서버가 필요해졌나
+description: SPA의 SEO·초기 로딩 한계를 SSR이 어떻게 해결하는지, 그리고 Node 서버가 왜 필요한지 이해한다
+sidebar:
+  order: 3
+learning_objectives:
+  - "SPA의 SEO 문제와 초기 빈 화면 문제를 설명한다"
+  - "SSR이 이 문제를 해결하는 방식을 이해한다"
+  - "Next.js 같은 Node 서버가 필요한 이유를 말할 수 있다"
+prerequisites:
+  - "React 컴포넌트/상태 개념 (06-01, 06-02)"
+  - "HTTP 기초 이해"
+estimated_minutes: 20
+references:
+  - title: "Next.js 공식 문서 - Rendering"
+    url: "https://nextjs.org/docs/app/building-your-application/rendering"
+    accessed: "2026-04-14"
+  - title: "web.dev - Rendering on the Web"
+    url: "https://web.dev/rendering-on-the-web/"
+    accessed: "2026-04-14"
+---
+
+React로 만든 앱은 처음에 순수 SPA(Single Page Application)로 배포했다. 정적 파일(HTML, JS, CSS)을 S3나 CDN에 올리면 끝이었다. 그러나 이 방식에는 두 가지 근본적인 문제가 있었다.
+
+## SPA의 두 가지 한계
+
+### 한계 1: SEO 문제
+
+SPA의 초기 HTML은 거의 비어 있다.
+
+```html
+<!-- Create React App이 서빙하는 index.html -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>My App</title>
+  </head>
+  <body>
+    <div id="root"></div>  <!-- 비어 있음 -->
+    <script src="/static/js/main.chunk.js"></script>
+  </body>
+</html>
+```
+
+구글 봇이 이 페이지를 크롤링하면 `<div id="root"></div>` 만 보인다. JavaScript를 실행해야 실제 콘텐츠가 생기는데, 봇은 JS 실행을 기다려주지 않거나 기다려도 불완전하게 처리한다. 검색 결과에 노출되어야 하는 블로그, 이커머스, 문서 사이트에는 치명적이다.
+
+### 한계 2: 초기 빈 화면(Blank Screen)
+
+```text
+SPA 로딩 순서:
+
+1. 브라우저가 빈 HTML 수신 (0.1초)
+2. JS 번들 다운로드 (네트워크 상황에 따라 1~5초)
+3. JS 파싱·실행
+4. React가 Virtual DOM 생성
+5. 실제 DOM에 마운트
+6. API 호출 → 데이터 수신
+7. 화면에 콘텐츠 표시 ← 여기까지 사용자는 빈 화면 또는 로딩 스피너만 봄
+```
+
+JS 번들이 클수록, 네트워크가 느릴수록 사용자는 더 오래 빈 화면을 본다. Core Web Vitals 지표인 LCP(Largest Contentful Paint)가 낮아져 SEO에도 영향을 준다.
+
+## SSR로 해결
+
+SSR(Server-Side Rendering)은 서버에서 HTML을 완성해서 보내는 방식이다.
+
+```text
+SSR 로딩 순서:
+
+1. 브라우저가 서버에 요청
+2. 서버가 React 컴포넌트를 실행해 완성된 HTML 생성
+3. 완성된 HTML 수신 → 즉시 콘텐츠 표시 (FCP 개선)
+4. JS 번들 다운로드·실행
+5. Hydration: 이미 있는 DOM에 이벤트 핸들러 연결
+6. 인터랙션 가능
+```
+
+SEO 봇은 완성된 HTML을 받으므로 콘텐츠를 올바르게 인덱싱한다. 사용자도 JS가 로드되기 전에 콘텐츠를 볼 수 있다.
+
+### SSR vs CSR vs SSG 비교
+
+| 방식 | HTML 생성 위치 | 데이터 패칭 시점 | SEO | TTFB | 예시 |
+|------|---------------|----------------|-----|------|------|
+| **CSR** | 브라우저 | 마운트 후 | 나쁨 | 빠름 | Create React App |
+| **SSR** | 서버 (요청마다) | 서버에서 | 좋음 | 느림 | Next.js 동적 페이지 |
+| **SSG** | 빌드 타임 | 빌드 시 | 좋음 | 매우 빠름 | 문서, 블로그 |
+
+## 왜 Node 서버가 필요한가
+
+SSR을 하려면 서버에서 React 컴포넌트를 실행해야 한다. React는 JavaScript로 작성되어 있으므로 JavaScript 런타임이 서버에 필요하다. 그것이 Node.js다.
+
+```text
+순수 정적 파일 배포 (SPA):
+  파일 시스템 → nginx/CDN → 브라우저
+
+SSR 배포:
+  파일 시스템 → Node.js 서버 → HTML 생성 → 브라우저
+               └── Python FastAPI ← (API 데이터)
+```
+
+Node 서버가 하는 일:
+
+```text
+1. 라우팅: /blog/my-post → 해당 컴포넌트 선택
+2. 데이터 패칭: DB나 API에서 페이지에 필요한 데이터 조회
+3. React 렌더링: renderToString() 또는 renderToPipeableStream()으로 HTML 생성
+4. HTML 응답: 완성된 HTML을 브라우저로 전송
+5. 정적 파일 서빙: JS/CSS 번들 제공
+```
+
+### Python FastAPI만으로는 안 되는가
+
+FastAPI로 REST API를 제공하고 React를 CSR로 쓰면 SSR 없이도 앱을 만들 수 있다. 하지만 SSR이 필요한 경우, FastAPI에서 React를 서버에서 렌더링하는 것은 사실상 불가능하다. Python은 React/JSX를 직접 실행할 수 없기 때문이다.
+
+일반적인 아키텍처:
+
+```text
+브라우저
+   │
+   ├─ (HTML/JS) → Next.js (Node) ─ (데이터) → FastAPI (Python)
+   │
+   └─ (API 직접 호출도 가능)
+```
+
+Next.js가 "BFF(Backend for Frontend)" 역할을 한다. FastAPI는 비즈니스 로직과 AI/ML 처리에 집중하고, Next.js는 UI 렌더링과 클라이언트 최적화를 담당한다.
+
+## Hydration
+
+SSR에서 한 가지 중요한 개념이 Hydration이다.
+
+```text
+서버: React 컴포넌트 → HTML 문자열 → 브라우저로 전송
+브라우저: HTML 표시 → JS 로드 → React가 DOM과 연결(Hydrate)
+```
+
+서버에서 생성된 HTML은 정적이다. 버튼을 클릭해도 아무 일이 일어나지 않는다. Hydration은 React가 이미 존재하는 DOM을 인식하고, 이벤트 핸들러와 상태를 연결하는 과정이다. 이후부터 인터랙션이 가능해진다.
+
+## 핵심 정리
+
+- **SPA는 SEO와 초기 로딩 두 가지 문제를 가진다** — 빈 HTML로 크롤링되고, JS 로드 전까지 빈 화면이 보인다
+- **SSR은 서버에서 완성된 HTML을 생성한다** — 봇이 콘텐츠를 인식하고, 사용자는 더 빨리 콘텐츠를 본다
+- **Node 서버가 필요한 이유는 React가 JavaScript이기 때문이다** — 서버에서 실행하려면 JavaScript 런타임이 필요하다
+- **Hydration은 정적 HTML에 인터랙션을 연결하는 과정이다** — SSR 이후 React가 DOM을 인수받는다
+- **Next.js는 BFF 역할을 한다** — FastAPI가 AI/ML 로직을 처리하는 동안 Next.js는 렌더링을 담당한다

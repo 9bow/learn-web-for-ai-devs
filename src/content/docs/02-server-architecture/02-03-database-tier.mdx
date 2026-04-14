@@ -1,0 +1,188 @@
+---
+title: 데이터베이스 계층과 연결 풀
+description: 3-Tier에서 DB 계층의 역할, Relational vs NoSQL 개요, 그리고 연결 풀이 보안과 확장성에 왜 중요한지 이해한다.
+sidebar:
+  order: 3
+learning_objectives:
+  - "3-Tier 아키텍처에서 DB 계층이 분리되어야 하는 이유를 설명할 수 있다"
+  - "Relational DB와 NoSQL의 차이와 각각의 적합한 사용 사례를 구분할 수 있다"
+  - "Connection Pool의 동작 원리와 SQLAlchemy 설정 방법을 이해한다"
+prerequisites:
+  - "02-01 챕터 완료 (3-Tier 아키텍처 기본)"
+  - "SQL 기본 개념"
+estimated_minutes: 20
+references:
+  - title: "SQLAlchemy — Engine Configuration"
+    url: "https://docs.sqlalchemy.org/en/20/core/engines.html"
+    accessed: "2026-04-14"
+  - title: "PostgreSQL — Connection and Authentication"
+    url: "https://www.postgresql.org/docs/current/runtime-config-connection.html"
+    accessed: "2026-04-14"
+  - title: "Redis — Introduction to Redis"
+    url: "https://redis.io/docs/latest/develop/get-started/"
+    accessed: "2026-04-14"
+---
+
+## 3-Tier에서 DB 계층의 위치
+
+3-Tier 아키텍처에서 Data Tier는 가장 안쪽에 있습니다. 외부 인터넷에서 직접 접근할 수 없고, Logic Tier(WAS)를 통해서만 도달할 수 있습니다.
+
+```text
+인터넷
+  │
+  ▼
+[nginx - Presentation Tier]   ← 외부 노출
+  │
+  ▼
+[FastAPI - Logic Tier]         ← 내부 네트워크
+  │
+  ▼
+[PostgreSQL/Redis - Data Tier] ← DB 전용 서브넷, 외부 접근 차단
+```
+
+DB를 별도 계층으로 분리하면 두 가지 이점이 생깁니다. 첫째, **보안** 입니다. DB 서버는 퍼블릭 IP 없이 운영하고, WAS와 같은 VPC(Virtual Private Cloud) 내부에서만 통신합니다. 공격 표면이 극적으로 줄어듭니다. 둘째, **독립 확장** 입니다. DB 서버의 스펙(메모리, 디스크 I/O)을 WAS와 별개로 조정할 수 있습니다.
+
+## Relational vs NoSQL
+
+AI 서비스를 구축하다 보면 서로 다른 특성의 데이터를 마주칩니다. 모든 데이터를 하나의 DB 종류에 넣을 필요가 없습니다.
+
+| 항목 | Relational (PostgreSQL) | NoSQL (Redis, MongoDB) |
+|------|------------------------|------------------------|
+| 데이터 모델 | 테이블, 행, 열 | 키-값, 문서, 그래프 |
+| 스키마 | 고정 (마이그레이션 필요) | 유연 (동적 필드 가능) |
+| 트랜잭션 | ACID 보장 | 종류마다 다름 |
+| 조인 | 네이티브 지원 | 어렵거나 불가 |
+| 확장 방식 | 수직 확장 중심 | 수평 확장 용이 |
+| 대표 사용 사례 | 사용자, 주문, 결제 | 캐시, 세션, 실시간 |
+
+### AI 서비스에서의 분류
+
+```text
+Relational (PostgreSQL):
+  - 사용자 계정, 요금제, 결제 내역
+  - 모델 요청 로그 (감사 추적 필요)
+  - RAG 시스템의 문서 메타데이터
+
+NoSQL:
+  - Redis: API 응답 캐시, 세션 토큰, Rate Limit 카운터
+  - MongoDB/Firestore: 비정형 대화 이력
+  - Pinecone/pgvector: 벡터 임베딩 (Semantic Search)
+```
+
+## Connection Pool이 필요한 이유
+
+데이터베이스 연결은 비쌉니다. TCP 핸드셰이크, 인증, 세션 초기화를 거칩니다. 요청마다 새로운 연결을 맺으면 대기 시간이 급증합니다.
+
+```text
+[연결 풀 없음]
+요청1 → 연결 생성(~10ms) → 쿼리(~5ms) → 연결 닫기 → 응답
+요청2 → 연결 생성(~10ms) → 쿼리(~5ms) → 연결 닫기 → 응답
+
+[연결 풀 있음]
+요청1 → 풀에서 연결 가져오기(~0.1ms) → 쿼리(~5ms) → 풀에 반환 → 응답
+요청2 → 풀에서 연결 가져오기(~0.1ms) → 쿼리(~5ms) → 풀에 반환 → 응답
+```
+
+Connection Pool은 미리 일정 수의 연결을 열어두고 재사용합니다. 요청이 들어오면 놀고 있는 연결을 빌려 쿼리를 실행하고, 끝나면 반납합니다.
+
+### SQLAlchemy로 Connection Pool 설정
+
+FastAPI에서 PostgreSQL을 쓸 때 SQLAlchemy의 `create_engine`으로 풀을 구성합니다.
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+# 예: postgresql://user:password@db-host:5432/mydb
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,        # 항상 유지할 연결 수
+    max_overflow=20,     # pool_size 초과 시 추가 허용 연결 수
+    pool_timeout=30,     # 연결 대기 최대 시간 (초)
+    pool_recycle=1800,   # 연결을 30분마다 재생성 (좀비 연결 방지)
+    pool_pre_ping=True,  # 쿼리 전 연결 유효성 확인
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# FastAPI 의존성 주입 패턴
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+### 풀 크기 결정 기준
+
+풀 크기를 무조건 크게 잡으면 역효과가 납니다. PostgreSQL은 연결마다 별도 프로세스를 생성하므로, 연결이 너무 많으면 DB 서버 메모리가 고갈됩니다.
+
+```text
+일반 권장 계산식:
+  pool_size = (DB 서버 CPU 코어 수) × 2 + 유효 스핀들 수
+
+예: 4 vCPU, SSD 사용
+  → pool_size = 4 × 2 + 1 = 9 (약 10으로 올림)
+
+WAS 인스턴스가 3대라면:
+  → DB가 받는 총 연결 = 10 × 3 = 30
+  → PostgreSQL max_connections 설정값보다 작아야 함
+```
+
+## 비동기 환경에서의 연결 풀
+
+FastAPI는 `async/await` 기반입니다. 동기 SQLAlchemy 엔진을 쓰면 이벤트 루프가 블로킹됩니다. 비동기 드라이버를 사용해야 합니다.
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+# asyncpg 드라이버 사용
+DATABASE_URL = "postgresql+asyncpg://user:password@db-host/mydb"
+
+async_engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=10,
+    max_overflow=20,
+)
+
+AsyncSessionLocal = sessionmaker(
+    async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+async def get_async_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+```
+
+## DB 분리가 보안에 미치는 영향
+
+```text
+[DB 분리 전]
+WAS 서버 = DB 서버 (같은 머신)
+  → WAS가 해킹당하면 DB도 즉시 노출
+  → 로컬 소켓으로 인증 없이 접근 가능한 경우도 있음
+
+[DB 분리 후]
+WAS 서버 → (VPC 내부 네트워크) → DB 서버
+  → DB는 퍼블릭 IP 없음
+  → 방화벽으로 WAS IP에서만 5432 포트 허용
+  → DB 접근에 별도 자격증명 (환경변수로 관리)
+  → WAS가 침해당해도 DB 접근에는 추가 인증 필요
+```
+
+DB 접속 정보는 절대 코드에 하드코딩하지 않습니다. 환경변수나 AWS Secrets Manager 같은 시크릿 관리 서비스에서 런타임에 읽어옵니다.
+
+## 핵심 정리
+
+- DB 계층은 외부 인터넷과 분리된 전용 서브넷에 배치하고, WAS에서만 접근을 허용한다. 이것이 DB 분리의 핵심 보안 이점이다.
+- Relational DB(PostgreSQL)는 ACID가 필요한 구조화 데이터에, NoSQL(Redis, 벡터 DB)은 캐시·세션·임베딩 등 유연한 데이터에 사용한다.
+- Connection Pool은 연결 생성 비용을 줄여 지연 시간을 낮추고 처리량을 높인다. SQLAlchemy의 `pool_size`, `max_overflow`, `pool_recycle` 설정이 핵심이다.
+- FastAPI처럼 비동기 서버를 쓰면 `asyncpg` 드라이버와 `create_async_engine`을 사용해야 이벤트 루프 블로킹을 피할 수 있다.
+- DB 접속 정보는 환경변수로 관리하고, 코드에 하드코딩하지 않는다.

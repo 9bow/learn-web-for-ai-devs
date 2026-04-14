@@ -1,0 +1,170 @@
+[
+  {
+    "id": "q1",
+    "question": "LLM 토큰 단위 스트리밍 응답을 구현할 때, 서버에서 클라이언트로만 데이터를 흘려보내면 충분하며 기존 HTTP 인프라를 그대로 활용하고 싶다. 가장 적합한 기술은?",
+    "options": [
+      "WebSocket — 양방향 통신이 가능해서",
+      "Server-Sent Events(SSE) — 단방향 스트리밍에 최적화되어 있고 HTTP 기반이므로",
+      "Long Polling — 안정적이고 모든 브라우저에서 동작해서",
+      "gRPC bidi streaming — 성능이 가장 뛰어나서"
+    ],
+    "answer": 1,
+    "explanation": "LLM 토큰 스트리밍은 서버→클라이언트 단방향이면 충분하고, SSE는 HTTP/1.1 위에서 동작하여 기존 프록시/방화벽과 호환된다. WebSocket은 양방향이 필요할 때 적합하고, gRPC는 브라우저가 직접 연결하지 못한다."
+  },
+  {
+    "id": "q2",
+    "question": "WebSocket 연결 수립 과정을 순서대로 나열한 것은?",
+    "options": [
+      "클라이언트가 바로 ws:// 연결을 시작 → 서버가 수락",
+      "클라이언트가 HTTP Upgrade 요청 → 서버가 101 Switching Protocols 응답 → 양방향 통신 시작",
+      "서버가 먼저 클라이언트에 연결 요청 → 클라이언트 수락",
+      "TLS 핸드셰이크 → UDP 연결 → 양방향 통신"
+    ],
+    "answer": 1,
+    "explanation": "WebSocket은 HTTP 업그레이드 메커니즘을 사용한다. 클라이언트가 Upgrade: websocket 헤더로 요청하고 서버가 101로 응답하면, 이후 동일 TCP 연결에서 프레임 기반 양방향 통신이 이루어진다."
+  },
+  {
+    "id": "q3",
+    "question": "Long Polling이 일반 Polling보다 효율적인 이유는?",
+    "options": [
+      "Long Polling은 UDP를 사용해 오버헤드가 적다",
+      "서버가 새 데이터가 생길 때까지 응답을 보류하여 불필요한 빈 응답 횟수를 줄인다",
+      "Long Polling은 연결을 영구적으로 유지한다",
+      "Long Polling은 서버 메모리를 더 적게 사용한다"
+    ],
+    "answer": 1,
+    "explanation": "일반 Polling은 고정 간격으로 계속 요청해 빈 응답이 많다. Long Polling은 서버가 이벤트 발생까지 연결을 유지하다 데이터가 생기면 응답하고 종료—클라이언트는 즉시 재연결한다. 네트워크 트래픽은 줄지만 연결 수는 동일하다."
+  },
+  {
+    "id": "q4",
+    "question": "SSE(Server-Sent Events)의 data 형식으로 올바른 것은?",
+    "options": [
+      "Content-Type: text/event-stream 으로 전송하며, 각 이벤트는 data: 로 시작하고 빈 줄로 구분된다",
+      "JSON 배열로 일괄 전송된다",
+      "WebSocket 프레임 형식과 동일하다",
+      "바이너리 프로토콜을 사용한다"
+    ],
+    "answer": 0,
+    "explanation": "SSE는 text/event-stream MIME 타입으로 스트리밍하며, 이벤트는 'data: 내용\\n\\n' 형식이다. 이벤트 타입(event:), ID(id:), 재연결 시간(retry:) 필드도 지원한다. 단순 텍스트라 디버깅도 쉽다."
+  },
+  {
+    "id": "q5",
+    "question": "gRPC가 REST API보다 뛰어난 상황은?",
+    "options": [
+      "브라우저에서 직접 API를 호출해야 할 때",
+      "서비스 간 내부 통신에서 낮은 지연과 강한 타입 안정성이 필요할 때",
+      "공개 API를 외부 개발자에게 제공할 때",
+      "간단한 CRUD 작업을 구현할 때"
+    ],
+    "answer": 1,
+    "explanation": "gRPC는 Protocol Buffers 기반 이진 직렬화와 HTTP/2 멀티플렉싱으로 서비스 간 고성능 내부 통신에 적합하다. 브라우저는 gRPC를 직접 지원하지 않아 grpc-web 프록시가 필요하므로 공개 API에는 REST가 더 실용적이다."
+  },
+  {
+    "id": "q6",
+    "question": "HTTP/2 Server Push 기능의 목적은?",
+    "options": [
+      "서버가 클라이언트 요청 없이 필요한 리소스를 미리 전송하여 추가 요청을 줄인다",
+      "클라이언트가 서버에 대용량 파일을 업로드한다",
+      "서버가 주기적으로 클라이언트 상태를 확인한다",
+      "양방향 실시간 메시지를 교환한다"
+    ],
+    "answer": 0,
+    "explanation": "HTML 응답과 함께 예상되는 CSS/JS를 Server Push로 미리 전송하면 클라이언트가 HTML을 파싱한 뒤 추가 요청을 보내는 왕복 지연을 제거할 수 있다. 단, 과도한 푸시는 역효과를 낸다."
+  },
+  {
+    "id": "q7",
+    "question": "WebSocket과 SSE를 선택할 때 결정적인 기준은?",
+    "options": [
+      "데이터 크기 — 큰 데이터는 WebSocket, 작은 데이터는 SSE",
+      "통신 방향 — 양방향이 필요하면 WebSocket, 서버→클라이언트 단방향이면 SSE",
+      "보안 — HTTPS에서는 SSE, HTTP에서는 WebSocket",
+      "사용자 수 — 사용자가 많으면 WebSocket, 적으면 SSE"
+    ],
+    "answer": 1,
+    "explanation": "채팅, 게임처럼 클라이언트도 실시간으로 메시지를 보내야 하면 WebSocket이 적합하다. LLM 스트리밍, 실시간 알림, 로그 스트림처럼 서버→클라이언트 단방향이면 SSE가 더 단순하고 HTTP 인프라와 호환된다."
+  },
+  {
+    "id": "q8",
+    "question": "FastAPI에서 StreamingResponse를 사용하는 상황은?",
+    "options": [
+      "응답 JSON이 매우 클 때 자동으로 분할 전송하기 위해",
+      "LLM 토큰을 생성되는 즉시 클라이언트에 전달하거나 대용량 파일을 청크로 스트리밍할 때",
+      "여러 클라이언트에 브로드캐스트할 때",
+      "파일을 서버에 업로드받을 때"
+    ],
+    "answer": 1,
+    "explanation": "StreamingResponse는 제너레이터(generator)로 데이터를 청크 단위로 생성하여 전송한다. LLM API의 stream=True 응답을 토큰마다 yield하면 사용자는 전체 생성을 기다리지 않고 첫 토큰부터 볼 수 있다."
+  },
+  {
+    "id": "q9",
+    "question": "HTTP/1.1 Keep-Alive와 HTTP/2 멀티플렉싱의 차이는?",
+    "options": [
+      "Keep-Alive는 TCP 연결을 재사용하지만 요청은 순차적이며, HTTP/2는 하나의 연결에서 요청/응답을 병렬로 처리한다",
+      "Keep-Alive는 HTTP/2 전용 기능이다",
+      "멀티플렉싱은 여러 TCP 연결을 동시에 사용한다",
+      "Keep-Alive와 멀티플렉싱은 동일한 기능이다"
+    ],
+    "answer": 0,
+    "explanation": "HTTP/1.1 Keep-Alive는 연결 재사용으로 핸드셰이크 오버헤드를 줄이지만, 여전히 요청은 순차적(HOL blocking)이다. HTTP/2 멀티플렉싱은 스트림 개념으로 하나의 TCP 연결에서 수십 개의 요청/응답을 동시에 인터리빙한다."
+  },
+  {
+    "id": "q10",
+    "question": "SSE에서 클라이언트 연결이 끊어졌을 때의 재연결 동작은?",
+    "options": [
+      "재연결은 클라이언트가 수동으로 구현해야 한다",
+      "EventSource API는 연결 끊김을 자동 감지하고 재연결을 시도하며, Last-Event-ID 헤더로 이어받을 수 있다",
+      "연결이 끊어지면 서버가 클라이언트에 재연결 신호를 보낸다",
+      "SSE는 연결 유지를 보장하므로 재연결이 필요 없다"
+    ],
+    "answer": 1,
+    "explanation": "브라우저의 EventSource는 연결 끊김을 자동 감지하고 기본 3초 후 재연결을 시도한다. 서버가 id: 필드를 보냈다면 재연결 시 Last-Event-ID 헤더로 마지막 이벤트 이후부터 이어받기가 가능하다."
+  },
+  {
+    "id": "q11",
+    "question": "AI 서비스에서 토큰 스트리밍 도중 nginx가 중간에 있을 때 버퍼링 문제가 발생했다. 가장 적절한 해결 방법은?",
+    "options": [
+      "nginx를 제거하고 FastAPI를 직접 클라이언트에 노출한다",
+      "proxy_buffering off; 설정으로 nginx의 프록시 버퍼링을 비활성화한다",
+      "청크 크기를 늘려 한 번에 많은 데이터를 전송한다",
+      "WebSocket으로 변경한다"
+    ],
+    "answer": 1,
+    "explanation": "nginx는 기본적으로 백엔드 응답을 버퍼링한 후 클라이언트에 전송한다. SSE/스트리밍에서는 proxy_buffering off; 와 X-Accel-Buffering: no 헤더 설정으로 청크를 즉시 통과시켜야 실시간 스트리밍이 가능하다."
+  },
+  {
+    "id": "q12",
+    "question": "gRPC의 Protocol Buffers(protobuf)가 JSON보다 효율적인 이유는?",
+    "options": [
+      "protobuf는 사람이 읽기 쉬워 디버깅이 쉽다",
+      "protobuf는 이진 형식으로 직렬화하여 JSON보다 크기가 작고 파싱이 빠르다",
+      "protobuf는 스키마가 없어 유연하다",
+      "protobuf는 모든 브라우저에서 기본 지원된다"
+    ],
+    "answer": 1,
+    "explanation": "protobuf는 필드 번호와 타입을 이진으로 인코딩하여 JSON 대비 3~10배 작고, 텍스트 파싱이 필요 없어 직렬화/역직렬화 속도가 빠르다. 단, 사람이 읽을 수 없고 브라우저 네이티브 지원이 없다는 단점이 있다."
+  },
+  {
+    "id": "q13",
+    "question": "채팅 애플리케이션에서 사용자가 메시지를 보내고 AI 응답을 실시간으로 받아야 한다. 가장 적합한 아키텍처는?",
+    "options": [
+      "REST API — 단순하고 안정적이어서",
+      "WebSocket — 클라이언트가 메시지를 보내고(↑) AI 응답을 스트리밍으로 받아야(↓) 하는 양방향 요구사항에 적합",
+      "SSE만 — 서버 응답만 받으면 충분해서",
+      "Long Polling — 구현이 단순해서"
+    ],
+    "answer": 1,
+    "explanation": "사용자 메시지 전송(클라이언트→서버)과 AI 응답 스트리밍(서버→클라이언트)이 동시에 필요한 경우 양방향 WebSocket이 적합하다. SSE는 사용자 메시지를 별도 REST로 보내는 하이브리드도 가능하지만, 채팅 맥락에서는 WebSocket이 더 자연스럽다."
+  },
+  {
+    "id": "q14",
+    "question": "HTTP/3(QUIC)의 주요 개선점은?",
+    "options": [
+      "TCP를 개선하여 더 빠른 연결을 제공한다",
+      "UDP 기반 QUIC 프로토콜로 TCP의 HOL blocking 문제를 해결하고 연결 수립 시간을 줄인다",
+      "HTTP/2의 암호화를 제거하여 속도를 높인다",
+      "서버 푸시를 제거하여 단순화한다"
+    ],
+    "answer": 1,
+    "explanation": "HTTP/3는 TCP 대신 UDP 기반 QUIC을 사용한다. QUIC은 스트림 레벨에서 독립적으로 손실 복구를 처리하므로, 하나의 패킷 손실이 다른 스트림을 블로킹하는 TCP의 HOL blocking이 없다. 또한 0-RTT 재연결로 연결 수립이 빠르다."
+  }
+]

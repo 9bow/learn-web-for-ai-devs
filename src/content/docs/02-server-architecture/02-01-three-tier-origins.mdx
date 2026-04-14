@@ -1,0 +1,161 @@
+---
+title: 3-Tier 아키텍처의 등장 배경
+description: 모놀리식 아키텍처의 한계와 3-Tier 분리가 왜 필요한지, AI 서비스 관점에서 설명합니다.
+sidebar:
+  order: 5
+learning_objectives:
+  - "모놀리식 아키텍처의 문제점을 설명할 수 있다"
+  - "Presentation, Logic, Data 계층의 역할과 책임을 구분할 수 있다"
+  - "AI 서비스에서 3-Tier 분리가 어떤 이점을 주는지 이해한다"
+prerequisites:
+  - "01-04 챕터 완료"
+  - "기본적인 서버/클라이언트 개념"
+estimated_minutes: 20
+references:
+  - title: "MDN Web Docs: Server-side web frameworks"
+    url: "https://developer.mozilla.org/en-US/docs/Learn/Server-side/First_steps/Web_frameworks"
+    accessed: "2026-04-14"
+  - title: "Microsoft Azure: N-tier architecture style"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/n-tier"
+    accessed: "2026-04-14"
+---
+
+## CGI 시대: 모든 것이 한 곳에
+
+웹 초기에는 **CGI(Common Gateway Interface)** 방식이 주류였습니다. 사용자가 요청을 보내면 웹 서버가 매번 새로운 프로세스를 띄워 스크립트를 실행하고 결과를 반환했습니다.
+
+```text
+[CGI 방식]
+브라우저 → 웹 서버(Apache) → 새 프로세스 fork() → Perl/PHP 스크립트
+                                                    ↓
+                              응답 ← HTML 생성 + DB 쿼리 + 비즈니스 로직
+```
+
+요청마다 프로세스를 새로 생성하는 비용이 엄청났습니다. 동시 사용자가 100명이면 100개의 프로세스가 생성됩니다. 게다가 HTML 출력, 데이터베이스 쿼리, 비즈니스 로직이 하나의 스크립트에 뒤섞였습니다.
+
+이것이 **모놀리식(Monolithic)** 구조의 시작입니다.
+
+## 모놀리식의 문제점
+
+모놀리식에서는 UI, 로직, 데이터 접근이 단일 코드베이스에 존재합니다.
+
+```text
+[모놀리식 서버]
+┌─────────────────────────────┐
+│  HTML 렌더링                │
+│  + 비즈니스 로직            │
+│  + DB 쿼리                  │
+│  + 파일 처리                │
+│  + 모델 추론                │
+└─────────────────────────────┘
+```
+
+문제가 쌓입니다.
+
+| 문제 | 설명 |
+|------|------|
+| **스케일링 불균형** | DB가 병목이어도 전체 서버를 늘려야 함 |
+| **배포 위험** | 작은 변경도 전체 재배포 필요 |
+| **기술 고착** | 한 부분만 다른 언어로 바꾸기 어려움 |
+| **장애 전파** | 한 기능 버그가 전체 서비스 다운 유발 |
+
+AI 서비스에서 특히 치명적입니다. 모델 추론은 GPU가 필요하고, 정적 파일 서빙은 CPU와 디스크가 필요하며, DB 쿼리는 또 다른 자원을 씁니다. 이들을 하나의 서버에 묶으면 자원을 최적으로 할당할 수 없습니다.
+
+## 3-Tier 아키텍처: 관심사 분리
+
+3-Tier 아키텍처는 시스템을 세 개의 계층으로 분리합니다.
+
+```text
+┌─────────────────────────────────────────┐
+│  Presentation Tier (표현 계층)           │
+│  nginx, React, 정적 파일                 │
+│  → 사용자에게 UI/응답을 보여주는 역할    │
+└─────────────────┬───────────────────────┘
+                  │ HTTP
+┌─────────────────▼───────────────────────┐
+│  Logic Tier (로직 계층)                  │
+│  FastAPI, Uvicorn, 비즈니스 규칙         │
+│  → 요청 처리, 모델 추론, 데이터 가공     │
+└─────────────────┬───────────────────────┘
+                  │ SQL / ORM
+┌─────────────────▼───────────────────────┐
+│  Data Tier (데이터 계층)                 │
+│  PostgreSQL, Redis, S3                  │
+│  → 데이터 영속성, 캐싱, 파일 저장        │
+└─────────────────────────────────────────┘
+```
+
+각 계층은 **인접한 계층하고만 통신** 합니다. Presentation Tier가 Data Tier에 직접 접근하지 않습니다.
+
+## 각 계층의 역할
+
+### Presentation Tier (표현 계층)
+
+사용자와 직접 맞닿는 계층입니다.
+
+- 정적 파일(HTML, CSS, JS, 이미지) 서빙
+- HTTPS 종료(TLS termination)
+- 요청 라우팅 (어떤 URL을 어디로 보낼지)
+- 로드밸런싱
+
+AI 서비스에서 React로 만든 챗봇 UI, 모델 데모 페이지가 여기에 해당합니다.
+
+### Logic Tier (로직 계층, WAS)
+
+비즈니스 로직을 처리하는 핵심 계층입니다.
+
+- HTTP 요청 파싱 및 검증
+- 모델 추론 실행
+- 인증/권한 확인
+- 데이터 가공 및 변환
+
+FastAPI + Uvicorn이 이 계층을 담당합니다. GPU 서버에 배치해 모델 추론을 처리합니다.
+
+### Data Tier (데이터 계층)
+
+데이터의 영속성을 담당합니다.
+
+- 관계형 DB: 사용자 정보, 요청 기록, 설정
+- 캐시 (Redis): 자주 쓰이는 추론 결과, 세션
+- 오브젝트 스토리지 (S3): 모델 가중치, 업로드된 이미지
+
+## AI 서비스에서 3-Tier의 이점
+
+```text
+[실제 AI 서비스 배포 예시]
+
+Presentation:  nginx (t3.small, 2 vCPU)
+                ↓
+Logic:         FastAPI + Uvicorn (g4dn.xlarge, GPU)  ← GPU 인스턴스만 스케일
+                ↓
+Data:          PostgreSQL (db.t3.medium) + Redis (cache.t3.micro)
+```
+
+Logic Tier만 독립적으로 스케일할 수 있습니다. 트래픽이 늘면 GPU 서버만 추가하면 됩니다. nginx나 DB까지 늘릴 필요가 없습니다.
+
+모델을 업데이트할 때도 Logic Tier만 재배포하면 됩니다. nginx와 DB는 영향받지 않습니다.
+
+## 모놀리식에서 3-Tier로의 전환
+
+많은 팀이 처음에는 모놀리식으로 시작합니다. 빠른 프로토타이핑에는 모놀리식이 유리하기 때문입니다.
+
+```text
+초기 (모놀리식):
+  Flask 하나에 모든 것 → 빠른 프로토타입
+
+성장 (분리 시작):
+  nginx 앞에 배치 → 정적 파일 분리
+  DB 서버 분리 → 데이터 계층 독립
+
+성숙 (완전한 3-Tier):
+  nginx + FastAPI + PostgreSQL 완전 분리
+  각 계층 독립 스케일 가능
+```
+
+## 핵심 정리
+
+- CGI 방식은 요청마다 프로세스를 생성해 비효율적이었다. 모놀리식도 모든 역할이 혼재해 스케일링이 어렵다.
+- 3-Tier는 Presentation(nginx), Logic(FastAPI), Data(DB) 계층으로 분리한다.
+- 각 계층은 인접 계층하고만 통신한다. Presentation이 DB에 직접 접근하지 않는다.
+- AI 서비스에서 3-Tier의 핵심 이점은 Logic Tier(GPU 서버)만 독립적으로 스케일할 수 있다는 점이다.
+- 프로토타입은 모놀리식으로 시작해도 되지만, 프로덕션으로 가면서 계층을 분리하는 것이 일반적인 경로다.

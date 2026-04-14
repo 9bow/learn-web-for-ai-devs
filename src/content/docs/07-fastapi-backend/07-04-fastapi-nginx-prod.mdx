@@ -1,0 +1,264 @@
+---
+title: FastAPI + nginx 실전 구성 (Uvicorn, Gunicorn, 워커)
+description: Uvicorn, Gunicorn, nginx를 조합해 프로덕션 수준의 FastAPI 배포 아키텍처를 구성한다
+sidebar:
+  order: 4
+learning_objectives:
+  - "Uvicorn(개발)과 Gunicorn+Uvicorn 워커(프로덕션)의 차이를 설명한다"
+  - "nginx를 리버스 프록시로 구성해 SSL 종료와 요청 버퍼링을 처리한다"
+  - "systemd로 Gunicorn 프로세스를 관리한다"
+prerequisites:
+  - "FastAPI 기본 이해 (07-02)"
+  - "Linux 기본 명령어"
+estimated_minutes: 30
+references:
+  - title: "Uvicorn Deployment"
+    url: "https://www.uvicorn.org/deployment/"
+    accessed: "2026-04-14"
+  - title: "Gunicorn 공식 문서"
+    url: "https://docs.gunicorn.org/en/stable/"
+    accessed: "2026-04-14"
+  - title: "nginx 공식 문서"
+    url: "https://nginx.org/en/docs/"
+    accessed: "2026-04-14"
+  - title: "FastAPI Deployment"
+    url: "https://fastapi.tiangolo.com/deployment/"
+    accessed: "2026-04-14"
+---
+
+개발 중에는 `uvicorn main:app --reload` 한 줄로 충분하다. 하지만 이 구성을 그대로 인터넷에 노출하면 안 된다. 프로덕션에는 세 가지 레이어가 필요하다: **nginx** (앞단), **Gunicorn** (프로세스 관리), **Uvicorn 워커** (ASGI 실행).
+
+## 전체 아키텍처
+
+```text
+Internet
+   │  HTTPS (443)
+   ▼
+┌──────────────────────────────────┐
+│  nginx                           │
+│  - SSL/TLS 종료                  │
+│  - 정적 파일 서빙                 │
+│  - 요청 버퍼링 / 타임아웃         │
+│  - client_max_body_size 제한     │
+│  - 접근 로그                     │
+└──────────────┬───────────────────┘
+               │  Unix socket (빠름) 또는 TCP 127.0.0.1:8000
+               ▼
+┌──────────────────────────────────┐
+│  Gunicorn (master process)       │
+│  - 워커 프로세스 생성/모니터링    │
+│  - 워커 재시작 / graceful reload │
+│  - 신호(SIGHUP, SIGTERM) 처리   │
+└──┬──────┬──────┬──────┬──────────┘
+   │      │      │      │
+   ▼      ▼      ▼      ▼
+ Uvicorn Uvicorn Uvicorn Uvicorn
+ worker  worker  worker  worker
+   │      │      │      │
+   └──────┴──────┴──────┘
+         FastAPI 앱 코드
+```
+
+## Uvicorn만 쓰면 안 되는 이유
+
+Uvicorn은 단일 프로세스 ASGI 서버다. 직접 인터넷에 노출했을 때의 문제:
+
+| 문제 | 설명 |
+|------|------|
+| Slow client 공격 | 느린 클라이언트가 연결을 오래 점유해 DoS 유발 |
+| SSL/TLS 없음 | Uvicorn은 SSL 설정이 번거롭고 성능도 떨어짐 |
+| 단일 CPU 활용 | GIL 때문에 멀티코어를 완전히 활용 못함 |
+| 워커 재시작 없음 | 메모리 누수 시 자동 복구 불가 |
+| 접근 로그 관리 | nginx의 로그 포맷/로테이션이 훨씬 강력 |
+
+## Gunicorn + Uvicorn 워커 설정
+
+```bash
+pip install gunicorn uvicorn[standard]
+```
+
+기본 실행 명령:
+
+```bash
+gunicorn main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind unix:/tmp/gunicorn.sock \
+  --timeout 120 \
+  --keepalive 5 \
+  --max-requests 1000 \
+  --max-requests-jitter 50 \
+  --access-logfile - \
+  --error-logfile -
+```
+
+설정 파일로 관리하는 것이 더 편리하다.
+
+```ini
+# gunicorn.conf.py
+bind = "unix:/tmp/gunicorn.sock"
+workers = 4
+worker_class = "uvicorn.workers.UvicornWorker"
+timeout = 120
+keepalive = 5
+max_requests = 1000
+max_requests_jitter = 50
+accesslog = "-"
+errorlog = "-"
+loglevel = "info"
+```
+
+```bash
+gunicorn main:app -c gunicorn.conf.py
+```
+
+### 워커 수 계산
+
+```text
+일반 웹 서버 (I/O 집약적):
+  워커 수 = CPU 코어 수 × 2 + 1
+
+ML 추론 서버 (CPU 집약적):
+  워커 수 = CPU 코어 수  (또는 코어 수 + 1)
+  이유: 추론 중 CPU를 꽉 잡기 때문에 더 많아봐야 컨텍스트 스위칭만 늘어남
+
+GPU 추론 서버:
+  워커 수 = 1 (GPU는 보통 하나를 여러 워커가 공유하면 충돌 발생)
+  대신 비동기로 요청을 큐잉하거나 별도 inference 서버(Triton 등) 사용
+```
+
+## Unix Socket vs TCP
+
+```text
+TCP (127.0.0.1:8000)
+  - 설정 간단
+  - 같은 서버 내에서도 네트워크 스택 거침
+  - 포트 번호로 충돌 가능
+
+Unix Socket (/tmp/gunicorn.sock)
+  - 같은 서버의 nginx-Gunicorn 통신에 최적
+  - 네트워크 스택 우회 → 지연 시간 감소
+  - 파일 권한으로 접근 제어
+```
+
+프로덕션에서는 Unix socket을 권장한다.
+
+## nginx 설정
+
+```nginx
+# /etc/nginx/sites-available/myapp
+
+upstream fastapi_app {
+    server unix:/tmp/gunicorn.sock fail_timeout=0;
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+
+    # SSL 인증서 (Let's Encrypt 예시)
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # 요청 크기 제한 (이미지/오디오 업로드가 있으면 늘림)
+    client_max_body_size 50M;
+
+    # LLM처럼 응답이 오래 걸리는 엔드포인트를 위한 타임아웃
+    proxy_read_timeout  300s;
+    proxy_send_timeout  300s;
+    proxy_connect_timeout 10s;
+
+    # 스트리밍 응답을 위해 버퍼링 비활성화
+    proxy_buffering off;
+    proxy_cache off;
+
+    location / {
+        proxy_pass http://fastapi_app;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 정적 파일은 nginx가 직접 서빙
+    location /static/ {
+        alias /var/www/myapp/static/;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+}
+```
+
+```bash
+# 설정 활성화 및 적용
+sudo ln -s /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/
+sudo nginx -t          # 설정 문법 검사
+sudo systemctl reload nginx
+```
+
+## systemd로 Gunicorn 관리
+
+서버 재부팅 시 자동 시작, 크래시 시 재시작을 설정한다.
+
+```ini
+# /etc/systemd/system/myapp.service
+
+[Unit]
+Description=FastAPI app via Gunicorn + Uvicorn
+After=network.target
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/myapp
+Environment="PATH=/var/www/myapp/venv/bin"
+ExecStart=/var/www/myapp/venv/bin/gunicorn main:app -c gunicorn.conf.py
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable myapp
+sudo systemctl start myapp
+sudo systemctl status myapp
+
+# 코드 배포 후 무중단 재시작
+sudo systemctl reload myapp
+```
+
+## FastAPI에서 X-Forwarded-For 신뢰하기
+
+nginx 뒤에 있으면 클라이언트 IP가 프록시 IP로 보인다. `ProxyHeadersMiddleware`로 수정한다.
+
+```python
+from fastapi import FastAPI
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+app = FastAPI()
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="127.0.0.1")
+```
+
+## 핵심 정리
+
+- **Uvicorn 단독은 개발 전용** — 프로덕션에는 Gunicorn이 워커를 관리해야 한다
+- **워커 수 = CPU × 2 + 1 (I/O), CPU 수 (GPU 추론)** — ML 워크로드는 더 적게 쓴다
+- **Unix socket이 TCP보다 빠름** — 같은 서버 내 nginx ↔ Gunicorn 통신에 최적이다
+- **nginx가 SSL, 버퍼링, 크기 제한을 담당** — LLM 서빙 시 `proxy_read_timeout`을 반드시 늘린다
+- **systemd로 자동 시작과 재시작 관리** — `systemctl reload`로 무중단 재배포가 가능하다

@@ -1,0 +1,244 @@
+---
+title: "인증/인가: JWT, OAuth, API Key"
+description: 세션 쿠키 vs JWT의 차이, JWT 구조, FastAPI OAuth2PasswordBearer, API Key, bcrypt로 안전한 인증을 구현한다
+sidebar:
+  order: 5
+learning_objectives:
+  - "세션 쿠키와 JWT의 동작 방식과 트레이드오프를 설명한다"
+  - "JWT 구조(Header.Payload.Signature)를 이해하고 FastAPI에서 구현한다"
+  - "비밀번호 해싱(bcrypt)과 API Key 인증을 올바르게 적용한다"
+prerequisites:
+  - "FastAPI 기본 이해 (07-02)"
+  - "HTTP 요청/응답 구조 이해"
+estimated_minutes: 20
+references:
+  - title: "FastAPI 공식 문서 - Security"
+    url: "https://fastapi.tiangolo.com/tutorial/security/"
+    accessed: "2026-04-14"
+  - title: "JWT 공식 사이트"
+    url: "https://jwt.io/introduction"
+    accessed: "2026-04-14"
+  - title: "python-jose 문서"
+    url: "https://python-jose.readthedocs.io/en/latest/"
+    accessed: "2026-04-14"
+---
+
+AI 서비스를 외부에 공개할 때 반드시 인증(Authentication: 누구인가)과 인가(Authorization: 무엇을 할 수 있는가)가 필요하다. FastAPI는 이를 위한 여러 도구를 기본 제공한다.
+
+## 세션 쿠키 vs JWT
+
+두 방식의 핵심 차이는 "상태를 어디에 저장하는가"다.
+
+| 항목 | 세션 쿠키 | JWT |
+|------|----------|-----|
+| 상태 저장 위치 | 서버 (DB/Redis) | 클라이언트 (토큰 자체) |
+| 서버 확인 방법 | 세션 ID로 DB 조회 | 서명(Signature) 검증 |
+| 수평 확장 | 세션 공유 필요 (Redis 등) | 서버리스/멀티 서버 친화적 |
+| 토큰 무효화 | 즉시 가능 (DB 삭제) | 만료 전까지 어려움 |
+| 페이로드 크기 | 작음 (세션 ID만) | 크거나 중간 (클레임 포함) |
+
+**AI API 서버라면 JWT가 더 일반적이다.** 여러 서버에 걸쳐 실행되는 인퍼런스 클러스터에서 세션 공유 없이 인증이 가능하기 때문이다.
+
+## JWT 구조
+
+JWT는 `Header.Payload.Signature` 세 부분을 `.`으로 연결한 Base64URL 문자열이다.
+
+```text
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9   ← Header
+.eyJzdWIiOiJ1c2VyMTIzIiwiZXhwIjoxNzE0MDAwMDAwfQ   ← Payload
+.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c   ← Signature
+```
+
+```python
+# Header (디코딩 시)
+{"alg": "HS256", "typ": "JWT"}
+
+# Payload (디코딩 시) — 클레임(claim)
+{
+  "sub": "user123",    # subject (사용자 식별자)
+  "exp": 1714000000,   # expiration (만료 시각, Unix timestamp)
+  "role": "admin"      # 커스텀 클레임
+}
+
+# Signature: HMAC-SHA256(base64(header) + "." + base64(payload), secret_key)
+```
+
+**중요:** Payload는 Base64URL 인코딩이지 암호화가 아니다. 누구나 디코딩해서 볼 수 있다. 비밀번호, 결제 정보 등 민감한 데이터를 넣으면 안 된다.
+
+## FastAPI JWT 구현
+
+```bash
+pip install python-jose[cryptography] passlib[bcrypt] python-multipart
+```
+
+```python
+# auth.py
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+
+SECRET_KEY = "your-secret-key-change-in-production"  # 실제 환경에서는 환경변수로
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def create_access_token(data: dict) -> str:
+    payload = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload.update({"exp": expire})
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰이 유효하지 않습니다",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+```
+
+```python
+# main.py
+from fastapi import FastAPI, Depends
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
+
+app = FastAPI()
+
+# 실제 환경에서는 DB에서 조회
+FAKE_USERS_DB = {
+    "alice": {
+        "username": "alice",
+        "hashed_password": get_password_hash("secret"),
+        "role": "user",
+    }
+}
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+@app.post("/token", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = FAKE_USERS_DB.get(form_data.username)
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="아이디 또는 비밀번호가 올바르지 않습니다",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = create_access_token({"sub": user["username"], "role": user["role"]})
+    return {"access_token": token, "token_type": "bearer"}
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = decode_token(token)
+    username = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    return {"username": username, "role": payload.get("role")}
+
+
+@app.get("/me")
+async def read_me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+
+@app.post("/inference")
+async def run_inference(
+    data: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    # 인가: role 확인
+    if current_user["role"] not in ["user", "admin"]:
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    return {"result": "inference result", "user": current_user["username"]}
+```
+
+## API Key 인증
+
+내부 서비스 간 통신이나 개발자 API에는 JWT보다 API Key가 더 단순하다.
+
+```python
+from fastapi import Security
+from fastapi.security import APIKeyHeader
+
+api_key_header = APIKeyHeader(name="X-API-Key")
+
+# 실제 환경에서는 DB에서 조회하고 해시 비교
+VALID_API_KEYS = {"sk-prod-abc123", "sk-dev-xyz789"}
+
+
+def verify_api_key(api_key: str = Security(api_key_header)):
+    if api_key not in VALID_API_KEYS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="유효하지 않은 API Key",
+        )
+    return api_key
+
+
+@app.post("/v1/completions")
+async def completions(
+    request: dict,
+    api_key: str = Depends(verify_api_key),
+):
+    return {"choices": [{"text": "..."}]}
+```
+
+클라이언트는 헤더에 키를 포함한다.
+
+```bash
+curl -X POST https://api.example.com/v1/completions \
+  -H "X-API-Key: sk-prod-abc123" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "안녕하세요"}'
+```
+
+## bcrypt 비밀번호 해싱
+
+비밀번호를 평문으로 저장하는 것은 절대 금지다. bcrypt는 의도적으로 느린 해시 함수로, 브루트포스 공격을 어렵게 만든다.
+
+```python
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# 회원가입 시
+hashed = pwd_context.hash("user-password")
+# '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW'
+
+# 로그인 시
+is_valid = pwd_context.verify("user-password", hashed)  # True
+is_invalid = pwd_context.verify("wrong-password", hashed)  # False
+```
+
+`$2b$12$` 에서 `12`는 cost factor다. 값이 클수록 느리고 안전하다. 기본값 12는 일반적으로 적절하다.
+
+## 핵심 정리
+
+- **JWT는 서버에 상태를 저장하지 않는다** — 서명 검증만으로 인증하므로 수평 확장에 유리하다
+- **JWT Payload는 누구나 디코딩 가능하다** — 민감한 정보를 넣으면 안 된다
+- **OAuth2PasswordBearer가 FastAPI의 표준 JWT 인증 방식이다** — Swagger UI 자동 연동이 장점이다
+- **API Key는 서비스 간 통신에 단순하고 효과적이다** — `X-API-Key` 헤더로 전달한다
+- **bcrypt로 비밀번호를 반드시 해싱한다** — 평문 저장은 절대 금지이며, `passlib`이 이를 쉽게 처리한다

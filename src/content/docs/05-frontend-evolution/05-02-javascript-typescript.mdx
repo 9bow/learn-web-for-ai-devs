@@ -1,0 +1,194 @@
+---
+title: "JavaScript와 TypeScript: 왜 TS가 표준이 되었나"
+description: JavaScript의 동적 타이핑이 초래하는 실제 문제들을 살펴보고, TypeScript가 어떻게 대규모 프로젝트의 표준이 되었는지 이해한다.
+sidebar:
+  order: 2
+learning_objectives:
+  - "JavaScript 동적 타이핑의 대표적 함정과 런타임 오류 패턴을 설명할 수 있다"
+  - "TypeScript의 컴파일 타임 검증, 타입 추론, 구조적 타이핑의 핵심 개념을 이해한다"
+  - "Python type hints와 TypeScript를 비교해 ML 엔지니어 관점에서 TS 도입 효과를 설명할 수 있다"
+prerequisites:
+  - "JavaScript 기초 문법"
+  - "Python 경험 (type hints 사용 경험 권장)"
+estimated_minutes: 20
+references:
+  - title: "TypeScript 공식 핸드북"
+    url: "https://www.typescriptlang.org/docs/handbook/intro.html"
+    accessed: "2026-04-14"
+  - title: "TypeScript - Why TypeScript?"
+    url: "https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html"
+    accessed: "2026-04-14"
+---
+
+## JavaScript의 유연함, 그리고 그 대가
+
+JavaScript는 브라우저에서 동작하는 유일한 언어다. 1995년 Netscape가 10일 만에 설계한 이 언어는 "누구나 빠르게 배울 수 있는 스크립트"를 목표로 했다. 동적 타이핑은 그 철학의 산물이다.
+
+```javascript
+// JavaScript — 문제없이 실행된다
+let x = 42
+x = "hello"       // 숫자에서 문자열로, 오류 없음
+x = { name: "AI" } // 객체로도 가능
+
+function add(a, b) {
+  return a + b
+}
+
+add(1, 2)       // 3
+add("1", 2)     // "12"  ← 문자열 연결!
+add(undefined, 2) // NaN  ← 조용히 실패
+```
+
+단순한 스크립트에서는 이 유연함이 편리하다. 하지만 코드베이스가 수만 줄로 커지면 이야기가 달라진다.
+
+## 동적 타이핑이 만드는 실제 문제
+
+### 리팩토링이 두렵다
+
+```javascript
+// 기존 코드
+function getUser(id) {
+  return { name: "Alice", email: "alice@example.com" }
+}
+
+// 3개월 후, 다른 팀원이 필드명을 변경
+function getUser(id) {
+  return { name: "Alice", emailAddress: "alice@example.com" } // email → emailAddress
+}
+
+// 여기저기 흩어진 호출부 — 아무 오류 없이 컴파일됨
+const user = getUser(1)
+console.log(user.email.toUpperCase()) // 런타임 오류: Cannot read property 'toUpperCase' of undefined
+```
+
+IDE가 자동 리팩토링을 해줄 수 없다. `email`을 사용하는 곳이 200군데라면, 그 중 하나라도 빠뜨리면 운영 중에 오류가 터진다.
+
+### IDE 지원이 약하다
+
+동적 타입 언어에서는 IDE가 자동완성을 제공하기 어렵다. 변수의 타입을 알 수 없으니 `.` 을 입력해도 어떤 메서드/프로퍼티가 있는지 알 수 없다.
+
+### 팀 협업 시 API 계약이 불명확하다
+
+```javascript
+// 이 함수가 무엇을 받고 무엇을 반환하는지 문서 없이는 알 수 없다
+async function processPrediction(input, options) {
+  // ...
+}
+```
+
+## TypeScript: 컴파일 타임에 잡는 오류
+
+TypeScript는 JavaScript의 **상위집합(superset)** 이다. 모든 JavaScript는 유효한 TypeScript다. 여기에 정적 타입 시스템을 더한 것이다.
+
+```typescript
+// TypeScript — 컴파일 시점에 오류를 잡는다
+interface User {
+  name: string
+  emailAddress: string
+}
+
+function getUser(id: number): User {
+  return { name: "Alice", emailAddress: "alice@example.com" }
+}
+
+const user = getUser(1)
+console.log(user.email.toUpperCase())
+// ^^^^^^ 컴파일 오류: Property 'email' does not exist on type 'User'
+//        Did you mean 'emailAddress'?
+```
+
+코드를 실행하기 전에, 심지어 브라우저에 올리기 전에 오류를 잡는다.
+
+### 타입 추론 — 매번 타입을 쓰지 않아도 된다
+
+```typescript
+const count = 42          // 자동으로 number 타입 추론
+const name = "Alice"      // 자동으로 string 타입 추론
+const items = [1, 2, 3]   // number[] 타입 추론
+
+// 함수 반환 타입도 추론
+function double(n: number) {
+  return n * 2  // 반환 타입 자동으로 number
+}
+```
+
+모든 곳에 타입을 명시할 필요 없다. 컴파일러가 추론한다.
+
+### 구조적 타이핑 — 덕 타이핑의 정적 버전
+
+```typescript
+interface Printable {
+  name: string
+}
+
+function printName(item: Printable) {
+  console.log(item.name)
+}
+
+// 명시적으로 Printable을 구현하지 않아도 된다
+const model = { name: "GPT-4", version: "turbo" }
+printName(model) // OK — name 프로퍼티가 있으므로 호환
+```
+
+"이름이 같은 타입"이 아니라 "구조가 맞는 타입"을 허용한다.
+
+## Python type hints와의 비교
+
+ML 엔지니어에게는 Python type hints가 가장 유사한 개념이다.
+
+| 특성 | Python type hints | TypeScript |
+|------|-------------------|------------|
+| 도입 시점 | Python 3.5+ (선택적) | 언어 설계의 핵심 |
+| 런타임 강제 | 기본적으로 없음 (mypy 별도 실행) | tsc 컴파일 시 강제 |
+| IDE 지원 | Pylance/mypy 기반 | 네이티브 수준 |
+| 타입 추론 | 제한적 | 매우 강력 |
+| 생태계 표준화 | 아직 선택적 | 대부분 프로젝트가 TS |
+
+```python
+# Python — type hints (런타임 강제 없음)
+def process_batch(
+    inputs: list[str],
+    batch_size: int = 32
+) -> list[float]:
+    ...
+```
+
+```typescript
+// TypeScript — 컴파일 시 강제
+function processBatch(
+  inputs: string[],
+  batchSize: number = 32
+): Promise<number[]> {
+  // ...
+}
+```
+
+발상은 같다. "코드를 문서화하고 오류를 일찍 잡자." 차이는 TypeScript가 이것을 언어의 핵심으로 설계했다는 점이다.
+
+## 실제 프로젝트에서 TS 도입 효과
+
+Airbnb, Microsoft, Google 등 대형 팀들이 TypeScript를 채택한 이유는 측정 가능한 효과가 있었기 때문이다.
+
+- **리팩토링 자신감**: IDE가 모든 사용처를 찾아 안전하게 변경
+- **온보딩 속도**: 새 팀원이 함수 시그니처만 봐도 사용법을 파악
+- **런타임 오류 감소**: Airbnb 보고서 기준 버그의 38%가 TS로 사전 방지 가능
+- **자동완성 품질**: 서버 응답 타입을 정의하면 프론트에서 100% 자동완성
+
+## TypeScript 컴파일 과정
+
+```bash
+# .ts 파일을 .js 파일로 변환
+npx tsc src/index.ts
+
+# 또는 번들러(Vite, webpack)가 자동으로 처리
+npm run build
+```
+
+TypeScript는 브라우저에서 직접 실행되지 않는다. 항상 JavaScript로 트랜스파일된다. 이 과정에서 타입 정보는 제거되고, 런타임에는 일반 JavaScript로 동작한다.
+
+## 핵심 정리
+
+- JavaScript의 동적 타이핑은 소규모에서는 편리하지만, 대규모 코드베이스에서 리팩토링 안전성과 IDE 지원을 취약하게 만든다
+- TypeScript는 컴파일 타임에 타입 오류를 잡아 런타임 오류를 예방하고, IDE 자동완성과 리팩토링 도구를 강력하게 만든다
+- Python의 type hints와 개념적으로 유사하지만, TS는 컴파일 강제와 타입 추론이 훨씬 강력하다
+- 오늘날 프론트엔드 프로젝트의 대부분은 TypeScript를 기본으로 사용하며, 새 프로젝트에서 JavaScript를 선택할 이유는 거의 없다

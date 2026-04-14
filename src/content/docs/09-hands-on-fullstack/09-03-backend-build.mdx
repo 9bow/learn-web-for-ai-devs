@@ -1,0 +1,291 @@
+---
+title: "백엔드 개발: FastAPI 엔드포인트와 SQLite 연결"
+description: SQLAlchemy 2.0과 Pydantic v2로 Todo CRUD API와 AI 요약 엔드포인트를 완성한다.
+sidebar:
+  order: 3
+learning_objectives:
+  - "SQLAlchemy 2.0 스타일로 ORM 모델을 정의할 수 있다"
+  - "Pydantic v2 스키마로 요청/응답 유효성 검사를 구현할 수 있다"
+  - "FastAPI 라우터로 CRUD 엔드포인트를 구성할 수 있다"
+prerequisites:
+  - "09-02 스캐폴딩 완료"
+  - "FastAPI 기초 (섹션 07)"
+  - "SQLAlchemy 기초 (섹션 08)"
+estimated_minutes: 40
+references:
+  - title: "SQLAlchemy 2.0 Mapped Columns"
+    url: "https://docs.sqlalchemy.org/en/20/orm/mapped_attributes.html"
+    accessed: "2026-04-14"
+  - title: "Pydantic v2 모델"
+    url: "https://docs.pydantic.dev/latest/concepts/models/"
+    accessed: "2026-04-14"
+---
+
+백엔드의 여섯 파일을 순서대로 완성한다. 각 파일은 단일 책임을 갖는다.
+
+## db.py — 데이터베이스 연결
+
+```python
+# backend/app/db.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
+from typing import Generator
+
+DATABASE_URL = "sqlite:///./app.db"
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},  # SQLite 전용 설정
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+`check_same_thread=False` 는 FastAPI의 비동기 워커가 여러 스레드에서 같은 SQLite 연결을 사용할 수 있도록 허용한다.
+
+## models.py — ORM 모델
+
+```python
+# backend/app/models.py
+from datetime import datetime, timezone
+from sqlalchemy import String, Boolean
+from sqlalchemy.orm import Mapped, mapped_column
+from .db import Base
+
+
+class Todo(Base):
+    __tablename__ = "todos"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    memo: Mapped[str] = mapped_column(String(2000), default="")
+    done: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(
+        String(32),
+        default=lambda: datetime.now(timezone.utc).isoformat(),
+    )
+```
+
+SQLAlchemy 2.0의 `Mapped` 타입 힌트 방식이다. `mapped_column()` 으로 컬럼 옵션을 지정한다.
+
+## schemas.py — Pydantic 스키마
+
+```python
+# backend/app/schemas.py
+from pydantic import BaseModel, Field
+
+
+class TodoCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    memo: str = Field(default="", max_length=2000)
+
+
+class TodoResponse(BaseModel):
+    id: int
+    title: str
+    memo: str
+    done: bool
+    created_at: str
+
+    model_config = {"from_attributes": True}  # ORM 객체에서 직접 변환
+
+
+class SummaryResponse(BaseModel):
+    summary: str
+```
+
+`from_attributes=True` 는 Pydantic v2 방식이다. SQLAlchemy 모델 인스턴스를 바로 `TodoResponse.model_validate(todo_orm)` 으로 변환할 수 있다.
+
+## summarizer.py — AI 요약 로직
+
+```python
+# backend/app/summarizer.py
+import re
+
+
+def summarize(text: str, max_sentences: int = 2) -> str:
+    """
+    규칙 기반 요약: 첫 N개 문장을 추출한다.
+    실제 프로덕션에서는 이 함수를 LLM API 호출로 교체한다.
+    """
+    if not text.strip():
+        return "요약할 내용이 없습니다."
+
+    # 마침표·느낌표·물음표 뒤에서 문장을 분리
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    selected = sentences[:max_sentences]
+    result = " ".join(selected)
+
+    # 200자 초과 시 말줄임표
+    if len(result) > 200:
+        result = result[:197] + "..."
+
+    return result
+```
+
+이 함수는 나중에 OpenAI / Anthropic API 호출로 교체할 수 있다. 인터페이스(`text: str → str`)는 동일하게 유지된다.
+
+## routes.py — API 라우터
+
+```python
+# backend/app/routes.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from .db import get_db
+from .models import Todo
+from .schemas import TodoCreate, TodoResponse, SummaryResponse
+from .summarizer import summarize
+
+router = APIRouter(prefix="/api/todos", tags=["todos"])
+
+
+@router.post("", response_model=TodoResponse, status_code=201)
+def create_todo(body: TodoCreate, db: Session = Depends(get_db)):
+    todo = Todo(title=body.title, memo=body.memo)
+    db.add(todo)
+    db.commit()
+    db.refresh(todo)
+    return todo
+
+
+@router.get("", response_model=list[TodoResponse])
+def list_todos(db: Session = Depends(get_db)):
+    return db.query(Todo).order_by(Todo.id.desc()).all()
+
+
+@router.get("/{todo_id}", response_model=TodoResponse)
+def get_todo(todo_id: int, db: Session = Depends(get_db)):
+    todo = db.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return todo
+
+
+@router.patch("/{todo_id}/toggle", response_model=TodoResponse)
+def toggle_todo(todo_id: int, db: Session = Depends(get_db)):
+    todo = db.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    todo.done = not todo.done
+    db.commit()
+    db.refresh(todo)
+    return todo
+
+
+@router.delete("/{todo_id}", status_code=204)
+def delete_todo(todo_id: int, db: Session = Depends(get_db)):
+    todo = db.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    db.delete(todo)
+    db.commit()
+
+
+@router.post("/{todo_id}/summary", response_model=SummaryResponse)
+def summarize_todo(todo_id: int, db: Session = Depends(get_db)):
+    todo = db.get(Todo, todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return {"summary": summarize(todo.memo)}
+```
+
+## main.py — 앱 진입점
+
+```python
+# backend/app/main.py
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from .db import engine, Base
+from .routes import router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 시작 시 테이블 생성
+    Base.metadata.create_all(bind=engine)
+    yield
+    # 종료 시 정리 (필요 시 추가)
+
+
+app = FastAPI(title="AI Summary Todo", version="1.0.0", lifespan=lifespan)
+
+# 개발 환경 CORS 설정 (프로덕션에서는 nginx가 같은 origin으로 처리)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+```
+
+## 서버 실행 및 테스트
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+```
+
+### curl로 빠른 검증
+
+```bash
+# Todo 생성
+curl -X POST http://localhost:8000/api/todos \
+  -H "Content-Type: application/json" \
+  -d '{"title": "FastAPI 공부", "memo": "섹션 07을 다시 읽는다. ORM 부분을 집중한다."}'
+
+# 목록 조회
+curl http://localhost:8000/api/todos
+
+# 요약
+curl -X POST http://localhost:8000/api/todos/1/summary
+```
+
+### Swagger UI 테스트
+
+`http://localhost:8000/docs` 에서 모든 엔드포인트를 인터랙티브하게 테스트할 수 있다. `POST /api/todos` 부터 시작해 전체 흐름을 확인한다.
+
+## 파일 구조 확인
+
+```bash
+backend/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── db.py
+│   ├── models.py
+│   ├── schemas.py
+│   ├── routes.py
+│   └── summarizer.py
+├── app.db          ← 서버 첫 실행 후 자동 생성
+└── requirements.txt
+```
+
+`app.db` 가 생성됐으면 테이블이 만들어진 것이다. SQLite CLI로 확인.
+
+```bash
+sqlite3 app.db ".tables"
+# → todos
+```
+
+다음 챕터에서 이 API를 호출하는 React 프론트엔드를 만든다.

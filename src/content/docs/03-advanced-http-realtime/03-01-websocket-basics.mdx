@@ -1,0 +1,157 @@
+---
+title: "WebSocket: 양방향 통신의 기본"
+description: HTTP 업그레이드 핸드셰이크부터 프레임 구조까지, WebSocket 프로토콜의 동작 원리를 이해한다.
+sidebar:
+  order: 1
+learning_objectives:
+  - "HTTP Upgrade 핸드셰이크 과정을 단계별로 설명할 수 있다"
+  - "WebSocket 프레임 구조와 opcode의 역할을 이해한다"
+  - "FastAPI와 nginx에서 WebSocket을 설정하고 프록시할 수 있다"
+prerequisites:
+  - "HTTP 요청/응답 사이클 기본 이해"
+  - "TCP 연결의 개념"
+estimated_minutes: 20
+references:
+  - title: "RFC 6455 — The WebSocket Protocol"
+    url: "https://datatracker.ietf.org/doc/html/rfc6455"
+    accessed: "2026-04-14"
+  - title: "MDN Web Docs — WebSocket API"
+    url: "https://developer.mozilla.org/en-US/docs/Web/API/WebSocket"
+    accessed: "2026-04-14"
+  - title: "nginx WebSocket proxying"
+    url: "https://nginx.org/en/docs/http/websocket.html"
+    accessed: "2026-04-14"
+---
+
+HTTP는 클라이언트가 요청하고 서버가 응답하는 단방향 모델이다. 채팅, 실시간 협업, 주식 호가처럼 서버가 먼저 데이터를 밀어야 하는 상황에서는 이 모델이 맞지 않는다. WebSocket은 이 문제를 TCP 연결을 재사용하는 양방향 채널로 해결한다.
+
+## HTTP Upgrade 핸드셰이크
+
+WebSocket은 HTTP 위에서 시작된다. 클라이언트가 먼저 평범한 HTTP GET 요청을 보내되, 특별한 헤더를 포함한다.
+
+```http
+GET /ws HTTP/1.1
+Host: example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+```
+
+서버가 WebSocket을 지원하면 `101 Switching Protocols`로 응답한다.
+
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+`Sec-WebSocket-Accept` 값은 클라이언트가 보낸 키에 고정 GUID를 붙여 SHA-1 해시한 결과다. 이 과정은 캐싱 프록시가 실수로 WebSocket 트래픽을 가로채지 못하게 막기 위한 보안 장치다. 이후 TCP 연결은 HTTP가 아닌 WebSocket 프레임을 주고받는 채널로 전환된다.
+
+## 프레임 구조
+
+핸드셰이크 이후 오가는 데이터는 **WebSocket 프레임** 단위로 전송된다.
+
+```text
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-------+-+-------------+-------------------------------+
+|F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+|I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+|N|V|V|V|       |S|             |                               |
+| |1|2|3|       |K|             |                               |
++-+-+-+-+-------+-+-------------+-------------------------------+
+|     Masking-key (if MASK set)                                 |
++---------------------------------------------------------------+
+|                    Payload Data                               |
++---------------------------------------------------------------+
+```
+
+주요 필드:
+
+| 필드 | 설명 |
+|------|------|
+| FIN | 마지막 프레임이면 1, 단편화된 메시지의 중간이면 0 |
+| opcode | 0x1=텍스트, 0x2=바이너리, 0x8=연결 종료, 0x9=ping, 0xA=pong |
+| MASK | 클라이언트→서버 방향은 반드시 1 (보안 요구사항, RFC 6455 §5.3) |
+| Payload len | 125 이하면 직접 표현, 126이면 뒤 2바이트, 127이면 뒤 8바이트 |
+
+클라이언트에서 서버로 향하는 모든 프레임은 마스킹 키로 XOR 처리된다. 서버→클라이언트는 마스킹 없이 전송된다.
+
+## 언제 WebSocket이 필요한가
+
+```text
+사용 적합:                          사용 부적합:
+- 실시간 채팅                       - LLM 토큰 스트리밍 (단방향)
+- 협업 편집 (Google Docs 스타일)    - 단순 알림 푸시 (SSE로 충분)
+- 온라인 게임                       - 일반 API 요청/응답
+- 주식/코인 호가 실시간 표시        - 모델 추론 결과 수신
+- 라이브 코드 실행 환경 (Jupyter)
+```
+
+AI 서비스에서 WebSocket이 필요한 상황은 **사용자가 대화 중에도 서버로 데이터를 보내야 할 때**다. 예를 들어 음성을 실시간으로 서버에 스트림하면서 동시에 서버의 전사 결과를 받아야 하는 음성 인식 서비스가 해당된다.
+
+## FastAPI WebSocket 서버
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+app = FastAPI()
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # 에코 응답 (실제 서비스에서는 LLM 호출 등으로 교체)
+            await websocket.send_text(f"받은 메시지: {data}")
+    except WebSocketDisconnect:
+        pass  # 클라이언트 연결 종료, 정상 처리
+```
+
+## 브라우저 클라이언트
+
+```javascript
+const ws = new WebSocket("wss://example.com/ws");
+
+ws.addEventListener("open", () => {
+  ws.send("안녕하세요");
+});
+
+ws.addEventListener("message", (event) => {
+  console.log("서버로부터:", event.data);
+});
+
+ws.addEventListener("close", (event) => {
+  console.log("연결 종료:", event.code, event.reason);
+});
+```
+
+`ws://`는 평문, `wss://`는 TLS 위의 WebSocket이다. 프로덕션에서는 항상 `wss://`를 사용한다.
+
+## nginx 리버스 프록시 설정
+
+HTTP/1.1 이상 및 `Upgrade` 헤더 전달이 필요하다. nginx 기본값은 HTTP/1.0이므로 명시적으로 지정해야 한다.
+
+```nginx
+location /ws {
+    proxy_pass http://backend:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;  # 장시간 유지 연결을 위해 타임아웃 연장
+}
+```
+
+`proxy_read_timeout`을 늘리지 않으면 nginx가 유휴 연결을 60초 뒤에 끊는다. AI 추론처럼 응답이 느린 서비스에서 특히 중요하다.
+
+## 핵심 정리
+
+- WebSocket은 HTTP `101 Switching Protocols`로 시작해 TCP 연결을 양방향 채널로 전환한다
+- 프레임은 opcode로 데이터 타입을 구분하며, 클라이언트 발신 프레임은 반드시 마스킹된다
+- FastAPI는 `@app.websocket()` 데코레이터로 WebSocket 엔드포인트를 간단히 정의한다
+- nginx 프록시 시 `proxy_http_version 1.1`과 `Upgrade` 헤더 전달이 필수다
+- LLM 토큰 스트리밍처럼 **단방향**으로 충분한 경우에는 SSE가 더 적합하다 (다음 챕터에서 설명)

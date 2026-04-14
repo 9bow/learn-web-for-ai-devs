@@ -1,0 +1,146 @@
+[
+  {
+    "id": "q1",
+    "question": "전통적인 MPA(Multi-Page Application)에서 페이지 이동이 발생할 때 브라우저의 동작은?",
+    "options": [
+      "JavaScript가 DOM을 업데이트하고 URL만 변경한다",
+      "서버에 새 HTML을 요청하고 브라우저가 전체 페이지를 다시 렌더링한다",
+      "WebSocket으로 변경된 부분만 수신한다",
+      "Service Worker가 캐시된 페이지를 반환한다"
+    ],
+    "answer": 1,
+    "explanation": "MPA는 링크를 클릭하거나 폼을 제출할 때마다 서버에 새 HTML 문서를 요청하고, 브라우저가 전체 페이지를 새로 로드한다. 이 과정에서 화면이 깜빡이는 현상이 발생하며, 이것이 SPA 등장의 배경이 되었다."
+  },
+  {
+    "id": "q2",
+    "question": "TypeScript가 JavaScript보다 대규모 프로젝트에서 선호되는 주된 이유는?",
+    "options": [
+      "런타임 성능이 JavaScript보다 빠르기 때문이다",
+      "브라우저가 TypeScript를 직접 실행할 수 있기 때문이다",
+      "정적 타입 검사로 컴파일 타임에 오류를 발견하고, IDE 자동완성과 리팩토링이 안정적이기 때문이다",
+      "번들 크기가 JavaScript보다 작기 때문이다"
+    ],
+    "answer": 2,
+    "explanation": "TypeScript는 정적 타입 시스템을 통해 타입 불일치, 존재하지 않는 속성 접근 등의 오류를 런타임이 아닌 컴파일 타임에 잡는다. 대규모 팀에서 코드베이스의 안정성과 유지보수성이 크게 향상된다. 브라우저는 TypeScript를 직접 실행하지 못하며 트랜스파일이 필요하다."
+  },
+  {
+    "id": "q3",
+    "question": "AJAX가 웹 개발에 가져온 가장 큰 변화는?",
+    "options": [
+      "CSS 애니메이션 지원",
+      "페이지 전체를 새로 로드하지 않고 서버와 비동기로 데이터를 교환해 부분 업데이트가 가능해졌다",
+      "WebGL 3D 렌더링 지원",
+      "서버 사이드 렌더링의 도입"
+    ],
+    "answer": 1,
+    "explanation": "AJAX(Asynchronous JavaScript and XML)는 XMLHttpRequest API를 통해 페이지 리로드 없이 서버와 통신할 수 있게 했다. Gmail, Google Maps 같은 Rich Internet Application의 등장이 가능해졌고, 이것이 현대 SPA의 기술적 선구자가 되었다."
+  },
+  {
+    "id": "q4",
+    "question": "SPA(Single-Page Application)에서 라우팅이 동작하는 방식은?",
+    "options": [
+      "URL이 바뀔 때마다 서버에서 새 HTML 파일을 받아온다",
+      "JavaScript가 History API를 사용해 URL을 변경하고, 해당 컴포넌트를 클라이언트에서 렌더링한다",
+      "iframe을 사용해 각 페이지를 별도로 로드한다",
+      "서버가 WebSocket으로 렌더링 명령을 전송한다"
+    ],
+    "answer": 1,
+    "explanation": "SPA는 초기에 단 한 번 HTML/JS/CSS를 로드한 후, 페이지 이동 시 JavaScript(React Router 등)가 History API로 URL을 변경하고 해당 컴포넌트를 동적으로 렌더링한다. 서버 요청은 데이터(API) 호출에만 사용된다."
+  },
+  {
+    "id": "q5",
+    "question": "CSR(Client-Side Rendering)의 주요 단점은?",
+    "options": [
+      "서버 부하가 높다",
+      "초기 로딩 시 빈 HTML이 전달되어 FCP(First Contentful Paint)가 늦고, 검색 엔진 크롤러가 JavaScript를 실행하지 못하면 SEO에 불리하다",
+      "실시간 데이터 업데이트가 불가능하다",
+      "모바일 기기에서 동작하지 않는다"
+    ],
+    "answer": 1,
+    "explanation": "CSR은 브라우저가 빈 HTML을 받은 후 JavaScript를 다운로드하고 실행해야 콘텐츠가 보인다. 이로 인해 초기 로딩이 느리고, SEO 크롤러가 JS를 실행하지 못하면 콘텐츠가 인덱싱되지 않는다. 내부 도구나 대시보드처럼 SEO가 필요 없는 앱에는 적합하다."
+  },
+  {
+    "id": "q6",
+    "question": "SSG(Static Site Generation)가 SSR보다 적합한 사용 사례는?",
+    "options": [
+      "사용자별 개인화된 대시보드",
+      "실시간 재고 정보를 보여주는 이커머스 상품 페이지",
+      "자주 변경되지 않는 마케팅 랜딩 페이지나 기술 문서 사이트",
+      "소셜 미디어의 실시간 피드"
+    ],
+    "answer": 2,
+    "explanation": "SSG는 빌드 시점에 HTML을 미리 생성한다. 콘텐츠가 자주 변하지 않는 블로그, 문서, 랜딩 페이지에 최적이다. 서버가 필요 없어 CDN에서 직접 서빙할 수 있으며 성능도 가장 좋다. 반면 실시간 데이터나 사용자별 데이터가 필요한 경우에는 SSR 또는 CSR이 필요하다."
+  },
+  {
+    "id": "q7",
+    "question": "Next.js의 ISR(Incremental Static Regeneration)이 해결하는 문제는?",
+    "options": [
+      "클라이언트 사이드 라우팅 속도 향상",
+      "SSG의 한계인 '빌드 후 콘텐츠 업데이트 불가' 문제를 해결하며, 배포 없이 특정 주기로 정적 페이지를 재생성한다",
+      "WebSocket 연결 안정성 향상",
+      "이미지 최적화 자동화"
+    ],
+    "answer": 1,
+    "explanation": "SSG는 빌드 시점에 HTML을 생성하므로 콘텐츠가 바뀌면 전체 재빌드가 필요하다. ISR은 `revalidate` 옵션으로 특정 시간 후 해당 페이지만 백그라운드에서 재생성한다. 블로그 포스트처럼 하루에 몇 번 업데이트되는 콘텐츠에 적합하다."
+  },
+  {
+    "id": "q8",
+    "question": "Fetch API와 XMLHttpRequest의 차이점으로 가장 올바른 설명은?",
+    "options": [
+      "Fetch는 동기 방식이고 XMLHttpRequest는 비동기 방식이다",
+      "Fetch는 Promise 기반으로 async/await와 함께 사용하기 쉽고, XMLHttpRequest는 콜백 기반으로 코드가 복잡해진다",
+      "Fetch는 GET 요청만 지원한다",
+      "Fetch는 Internet Explorer에서만 동작한다"
+    ],
+    "answer": 1,
+    "explanation": "Fetch API는 Promise를 반환하므로 async/await로 깔끔하게 작성할 수 있다. XMLHttpRequest는 이벤트 핸들러와 콜백 기반으로 콜백 헬이 발생하기 쉽다. 현대 프로젝트에서는 Fetch 또는 axios를 사용하며 XMLHttpRequest를 직접 쓰는 경우는 거의 없다."
+  },
+  {
+    "id": "q9",
+    "question": "Vite가 개발 서버에서 빠른 이유는?",
+    "options": [
+      "TypeScript를 바이트코드로 컴파일하기 때문이다",
+      "브라우저의 네이티브 ES Modules를 활용해 개발 시 번들링 없이 필요한 파일만 변환하고, HMR이 변경된 모듈만 교체한다",
+      "서버 사이드 렌더링을 기본으로 사용하기 때문이다",
+      "CSS를 JavaScript로 변환하지 않기 때문이다"
+    ],
+    "answer": 1,
+    "explanation": "Webpack은 개발 시 전체 앱을 번들링한 후 서빙한다. Vite는 개발 모드에서 번들링 없이 브라우저가 직접 ES Modules를 로드하게 하고, esbuild로 각 파일을 필요할 때만 변환한다. 프로젝트가 클수록 Vite의 개발 서버 시작 속도 이점이 커진다."
+  },
+  {
+    "id": "q10",
+    "question": "웹 컴포넌트(Web Components)와 React 컴포넌트의 가장 큰 차이점은?",
+    "options": [
+      "React 컴포넌트는 서버에서만 실행된다",
+      "웹 컴포넌트는 브라우저 표준 API(Custom Elements, Shadow DOM)를 사용하므로 프레임워크 없이도 동작하고, React 컴포넌트는 React 런타임이 필요하다",
+      "웹 컴포넌트는 TypeScript를 지원하지 않는다",
+      "React 컴포넌트는 CSS를 지원하지 않는다"
+    ],
+    "answer": 1,
+    "explanation": "웹 컴포넌트는 Custom Elements, Shadow DOM, HTML Templates 같은 브라우저 네이티브 표준으로 구현되어 어떤 프레임워크와도 호환된다. React 컴포넌트는 React 가상 DOM 런타임에 의존한다. 라이브러리 독립적인 UI 컴포넌트가 필요하다면 웹 컴포넌트가 적합하다."
+  },
+  {
+    "id": "q11",
+    "question": "Progressive Enhancement(점진적 향상) 전략의 핵심 원칙은?",
+    "options": [
+      "최신 브라우저 기능만을 대상으로 개발하고 구형 브라우저는 지원하지 않는다",
+      "기본 HTML/CSS로 핵심 기능을 먼저 구현하고, JavaScript가 활성화된 환경에서 더 풍부한 경험을 제공한다",
+      "모든 기능을 JavaScript로만 구현한다",
+      "서버 사이드 렌더링을 완전히 배제한다"
+    ],
+    "answer": 1,
+    "explanation": "점진적 향상은 가장 기본적인 환경(JS 비활성화, 구형 브라우저)에서도 핵심 기능이 동작하도록 하고, 더 좋은 환경에서는 향상된 UX를 제공한다. 반대 개념인 Graceful Degradation은 최신 기능으로 먼저 구현 후 구형 환경에 맞게 축소한다."
+  },
+  {
+    "id": "q12",
+    "question": "번들러(Bundler)가 필요한 이유가 아닌 것은?",
+    "options": [
+      "여러 JS 파일의 의존성을 하나(또는 몇 개)로 묶어 HTTP 요청 수를 줄인다",
+      "Tree Shaking으로 사용하지 않는 코드를 제거한다",
+      "TypeScript를 JavaScript로 트랜스파일한다",
+      "데이터베이스 쿼리 속도를 높인다"
+    ],
+    "answer": 3,
+    "explanation": "번들러(Webpack, Vite, Rollup 등)의 역할은 모듈 의존성 해석, 파일 번들링, Tree Shaking, 코드 트랜스파일, 에셋 최적화 등이다. 데이터베이스 쿼리 최적화는 번들러와 관계없는 백엔드 영역이다."
+  }
+]

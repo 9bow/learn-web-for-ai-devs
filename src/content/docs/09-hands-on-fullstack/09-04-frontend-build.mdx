@@ -1,0 +1,364 @@
+---
+title: "프론트엔드 개발: React 컴포넌트와 API 연동"
+description: TypeScript fetch 래퍼와 React 컴포넌트로 Todo CRUD 프론트엔드를 완성한다.
+sidebar:
+  order: 4
+learning_objectives:
+  - "타입 안전한 fetch 래퍼(api.ts)를 작성할 수 있다"
+  - "useState + useEffect로 서버 상태를 관리할 수 있다"
+  - "로딩·에러 상태를 UI에 반영하는 패턴을 적용할 수 있다"
+prerequisites:
+  - "09-03 백엔드 빌드 완료"
+  - "React 기초 (섹션 06)"
+  - "TypeScript 기초"
+estimated_minutes: 40
+references:
+  - title: "React useEffect"
+    url: "https://react.dev/reference/react/useEffect"
+    accessed: "2026-04-14"
+  - title: "TypeScript Fetch API"
+    url: "https://www.typescriptlang.org/docs/handbook/2/types-from-types.html"
+    accessed: "2026-04-14"
+---
+
+프론트엔드는 다섯 파일로 구성된다. `api.ts` 가 서버와 대화하고, 컴포넌트들은 그 결과를 화면에 표시한다.
+
+## api.ts — fetch 래퍼와 타입 정의
+
+```typescript
+// frontend/src/api.ts
+
+export interface Todo {
+  id: number
+  title: string
+  memo: string
+  done: boolean
+  created_at: string
+}
+
+const BASE = "/api/todos"
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`${res.status} ${res.statusText}: ${text}`)
+  }
+  if (res.status === 204) return undefined as T
+  return res.json() as Promise<T>
+}
+
+export const api = {
+  list: () => request<Todo[]>(BASE),
+
+  create: (title: string, memo: string) =>
+    request<Todo>(BASE, {
+      method: "POST",
+      body: JSON.stringify({ title, memo }),
+    }),
+
+  toggle: (id: number) =>
+    request<Todo>(`${BASE}/${id}/toggle`, { method: "PATCH" }),
+
+  remove: (id: number) =>
+    request<void>(`${BASE}/${id}`, { method: "DELETE" }),
+
+  summarize: (id: number) =>
+    request<{ summary: string }>(`${BASE}/${id}/summary`, { method: "POST" }),
+}
+```
+
+모든 API 호출은 이 객체를 통한다. 컴포넌트는 `fetch` 를 직접 호출하지 않는다.
+
+## TodoForm.tsx — 새 항목 입력
+
+```tsx
+// frontend/src/components/TodoForm.tsx
+import { useState, FormEvent } from "react"
+import { api, Todo } from "../api"
+
+interface Props {
+  onCreated: (todo: Todo) => void
+}
+
+export function TodoForm({ onCreated }: Props) {
+  const [title, setTitle] = useState("")
+  const [memo, setMemo] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!title.trim()) return
+    setLoading(true)
+    setError(null)
+    try {
+      const todo = await api.create(title.trim(), memo.trim())
+      onCreated(todo)
+      setTitle("")
+      setMemo("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "생성 실패")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ marginTop: "1rem" }}>
+      <div>
+        <input
+          type="text"
+          placeholder="할 일 제목"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          style={{ width: "100%", marginBottom: "0.5rem", padding: "0.4rem" }}
+        />
+      </div>
+      <div>
+        <textarea
+          placeholder="메모 (선택)"
+          value={memo}
+          onChange={(e) => setMemo(e.target.value)}
+          rows={3}
+          style={{ width: "100%", marginBottom: "0.5rem", padding: "0.4rem" }}
+        />
+      </div>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+      <button type="submit" disabled={loading}>
+        {loading ? "추가 중..." : "추가"}
+      </button>
+    </form>
+  )
+}
+```
+
+## TodoItem.tsx — 개별 항목
+
+```tsx
+// frontend/src/components/TodoItem.tsx
+import { useState } from "react"
+import { api, Todo } from "../api"
+
+interface Props {
+  todo: Todo
+  onToggled: (updated: Todo) => void
+  onDeleted: (id: number) => void
+}
+
+export function TodoItem({ todo, onToggled, onDeleted }: Props) {
+  const [summary, setSummary] = useState<string | null>(null)
+  const [summarizing, setSummarizing] = useState(false)
+
+  async function handleToggle() {
+    try {
+      const updated = await api.toggle(todo.id)
+      onToggled(updated)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "토글 실패")
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirm("삭제하시겠습니까?")) return
+    try {
+      await api.remove(todo.id)
+      onDeleted(todo.id)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "삭제 실패")
+    }
+  }
+
+  async function handleSummarize() {
+    setSummarizing(true)
+    setSummary(null)
+    try {
+      const res = await api.summarize(todo.id)
+      setSummary(res.summary)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "요약 실패")
+    } finally {
+      setSummarizing(false)
+    }
+  }
+
+  return (
+    <li style={{
+      borderBottom: "1px solid #eee",
+      padding: "0.75rem 0",
+      listStyle: "none",
+    }}>
+      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <input type="checkbox" checked={todo.done} onChange={handleToggle} />
+        <span style={{ textDecoration: todo.done ? "line-through" : "none", fontWeight: 600 }}>
+          {todo.title}
+        </span>
+      </label>
+
+      {todo.memo && (
+        <p style={{ margin: "0.25rem 0 0.5rem 1.5rem", color: "#555", fontSize: "0.9rem" }}>
+          {todo.memo}
+        </p>
+      )}
+
+      {summary && (
+        <p style={{ margin: "0.25rem 0 0.5rem 1.5rem", color: "#0070f3", fontSize: "0.9rem" }}>
+          요약: {summary}
+        </p>
+      )}
+
+      <div style={{ marginLeft: "1.5rem", display: "flex", gap: "0.5rem" }}>
+        <button onClick={handleSummarize} disabled={summarizing || !todo.memo}>
+          {summarizing ? "요약 중..." : "요약"}
+        </button>
+        <button onClick={handleDelete} style={{ color: "red" }}>
+          삭제
+        </button>
+      </div>
+    </li>
+  )
+}
+```
+
+## TodoList.tsx — 목록
+
+```tsx
+// frontend/src/components/TodoList.tsx
+import { Todo } from "../api"
+import { TodoItem } from "./TodoItem"
+
+interface Props {
+  todos: Todo[]
+  onToggled: (updated: Todo) => void
+  onDeleted: (id: number) => void
+}
+
+export function TodoList({ todos, onToggled, onDeleted }: Props) {
+  if (todos.length === 0) {
+    return <p style={{ color: "#999" }}>할 일이 없습니다. 추가해보세요!</p>
+  }
+
+  return (
+    <ul style={{ padding: 0 }}>
+      {todos.map((todo) => (
+        <TodoItem
+          key={todo.id}
+          todo={todo}
+          onToggled={onToggled}
+          onDeleted={onDeleted}
+        />
+      ))}
+    </ul>
+  )
+}
+```
+
+## App.tsx — 루트 컴포넌트
+
+```tsx
+// frontend/src/App.tsx
+import { useState, useEffect } from "react"
+import { api, Todo } from "./api"
+import { TodoList } from "./components/TodoList"
+import { TodoForm } from "./components/TodoForm"
+
+export default function App() {
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.list()
+      .then(setTodos)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  function handleCreated(todo: Todo) {
+    setTodos((prev) => [todo, ...prev])
+  }
+
+  function handleToggled(updated: Todo) {
+    setTodos((prev) => prev.map((t) => (t.id === updated.id ? updated : t)))
+  }
+
+  function handleDeleted(id: number) {
+    setTodos((prev) => prev.filter((t) => t.id !== id))
+  }
+
+  return (
+    <div style={{ maxWidth: "600px", margin: "2rem auto", padding: "0 1rem", fontFamily: "sans-serif" }}>
+      <h1 style={{ borderBottom: "2px solid #0070f3", paddingBottom: "0.5rem" }}>
+        AI 요약 Todo
+      </h1>
+
+      {loading && <p>불러오는 중...</p>}
+      {error && <p style={{ color: "red" }}>오류: {error}</p>}
+
+      {!loading && (
+        <>
+          <TodoList
+            todos={todos}
+            onToggled={handleToggled}
+            onDeleted={handleDeleted}
+          />
+          <TodoForm onCreated={handleCreated} />
+        </>
+      )}
+    </div>
+  )
+}
+```
+
+## main.tsx — 진입점
+
+```tsx
+// frontend/src/main.tsx
+import { StrictMode } from "react"
+import { createRoot } from "react-dom/client"
+import App from "./App"
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+)
+```
+
+## 실행 및 확인
+
+백엔드와 프론트엔드를 각각 실행한다.
+
+```bash
+# 터미널 1
+cd backend && source .venv/bin/activate && uvicorn app.main:app --reload
+
+# 터미널 2
+cd frontend && pnpm dev
+```
+
+`http://localhost:5173` 에서 다음 흐름을 확인한다.
+
+1. 할 일 제목과 메모를 입력 후 **추가** 클릭 → 목록에 나타남
+2. 체크박스 클릭 → 취소선 토글
+3. **요약** 버튼 클릭 → 메모 아래 요약 텍스트 표시
+4. **삭제** 버튼 클릭 → 목록에서 제거
+
+## 상태 흐름 요약
+
+```text
+App (todos 상태)
+  ├── useEffect → api.list() → setTodos
+  ├── TodoList → TodoItem
+  │     ├── api.toggle() → onToggled → setTodos(map)
+  │     ├── api.remove() → onDeleted → setTodos(filter)
+  │     └── api.summarize() → setSummary (로컬 상태)
+  └── TodoForm → api.create() → onCreated → setTodos(prepend)
+```
+
+서버 상태는 `App` 의 `todos` 배열이 단일 출처(single source of truth)가 된다. 변경이 생기면 배열을 새 객체로 교체해 React가 리렌더링하도록 한다.
+
+다음 챕터에서 Claude Code를 활용해 이 앱을 더 효율적으로 개발하는 팁을 배운다.

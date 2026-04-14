@@ -1,0 +1,152 @@
+---
+title: 왜 AI 개발자가 웹을 알아야 하는가
+description: 모델 서빙 관점에서 웹 기술이 필요한 이유와 HTTP가 AI 서비스의 공통 언어인 이유를 설명합니다.
+sidebar:
+  order: 1
+learning_objectives:
+  - "모델 학습과 모델 서빙의 차이를 설명할 수 있다"
+  - "HTTP가 AI 서비스 배포의 표준 인터페이스가 된 이유를 이해한다"
+  - "HuggingFace, OpenAI, Replicate 등 실제 ML 플랫폼이 어떻게 웹을 활용하는지 파악한다"
+prerequisites:
+  - "Python 기초 문법"
+  - "PyTorch 또는 HuggingFace Transformers 사용 경험"
+estimated_minutes: 20
+references:
+  - title: "HuggingFace Inference Endpoints Documentation"
+    url: "https://huggingface.co/docs/inference-endpoints/index"
+    accessed: "2026-04-14"
+  - title: "OpenAI API Reference"
+    url: "https://platform.openai.com/docs/api-reference"
+    accessed: "2026-04-14"
+  - title: "MDN Web Docs: HTTP Overview"
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview"
+    accessed: "2026-04-14"
+---
+
+## "엔드포인트 주세요" — 모델 완성 이후의 세계
+
+팀원이 이렇게 말합니다. "모델 학습 완료됐죠? 그럼 엔드포인트 주세요."
+
+이 한 마디가 당신을 당혹스럽게 만든다면, 이 챕터가 바로 그 시작점입니다.
+
+AI 개발자의 대부분의 시간은 데이터 준비, 모델 설계, 학습 루프 작성, 평가 지표 분석에 쏟립니다. 하지만 모델이 아무리 훌륭해도 다른 사람이 사용할 수 없다면 그것은 연구 결과물일 뿐입니다. **실제 제품** 이 되려면 모델이 네트워크를 통해 요청을 받고 응답을 돌려주는 구조가 필요합니다. 이것이 **모델 서빙** 입니다.
+
+## 학습 vs 서빙: 완전히 다른 문제
+
+PyTorch로 모델을 학습할 때와 서빙할 때는 관심사가 근본적으로 다릅니다.
+
+| 구분 | 학습 (Training) | 서빙 (Serving) |
+|------|----------------|---------------|
+| 실행 단위 | 배치(batch) 처리 | 요청(request) 처리 |
+| 동시성 | 단일 프로세스로 GPU 점유 | 다수의 클라이언트 동시 처리 |
+| 상태 | Stateful (가중치 업데이트) | Stateless (요청마다 독립적) |
+| 실패 처리 | 체크포인트로 재시작 | 즉시 오류 응답 반환 |
+| 주요 도구 | PyTorch, HuggingFace Trainer | FastAPI, Uvicorn, nginx |
+
+학습 코드에서 `model(input_tensor)`를 호출하는 것처럼, 서빙에서는 HTTP 요청 안의 데이터를 꺼내 모델에 넣고 결과를 HTTP 응답으로 돌려줍니다. 그 중간에 웹 기술이 자리합니다.
+
+## HTTP: AI 서비스의 공통 언어
+
+왜 모든 AI 플랫폼은 HTTP API를 제공할까요? 대안을 생각해보면 이유가 명확해집니다.
+
+- **gRPC**: 고성능이지만 클라이언트-서버가 같은 proto 파일을 공유해야 합니다.
+- **WebSocket**: 실시간 양방향 통신에 적합하지만 단순 추론 요청에는 과합니다.
+- **직접 소켓 통신**: 모든 언어/환경에서 구현해야 하는 부담이 큽니다.
+
+HTTP는 **언어 독립적** 이고, **방화벽 친화적** 이며, **도구 생태계** 가 방대합니다. curl 한 줄로 모델을 테스트하고, JavaScript로 웹 앱을 붙이고, Python으로 배치 클라이언트를 작성할 수 있습니다. 이것이 OpenAI부터 작은 스타트업까지 모두 HTTP REST API를 선택하는 이유입니다.
+
+## 실제 ML 플랫폼이 HTTP를 쓰는 방식
+
+### OpenAI API
+
+```http
+POST https://api.openai.com/v1/chat/completions
+Authorization: Bearer sk-...
+Content-Type: application/json
+
+{
+  "model": "gpt-4o",
+  "messages": [{"role": "user", "content": "안녕하세요"}]
+}
+```
+
+내부적으로 수백 개의 GPU 서버가 있지만 외부에는 단순한 HTTP 엔드포인트 하나만 노출합니다. 요청자는 내부 인프라를 전혀 알 필요가 없습니다.
+
+### HuggingFace Inference Endpoints
+
+HuggingFace에서 모델을 배포하면 다음과 같은 엔드포인트가 생성됩니다.
+
+```http
+POST https://xyz.us-east-1.aws.endpoints.huggingface.cloud
+Authorization: Bearer hf_...
+Content-Type: application/json
+
+{
+  "inputs": "번역할 텍스트입니다"
+}
+```
+
+내부적으로 HuggingFace는 Docker 컨테이너로 모델을 감싸고, nginx로 트래픽을 분산하며, HTTPS로 암호화합니다. 이 모든 것이 웹 기술의 조합입니다.
+
+### Replicate
+
+```python
+import replicate
+
+output = replicate.run(
+    "stability-ai/sdxl:...",
+    input={"prompt": "a photo of a cat"}
+)
+```
+
+Python 클라이언트처럼 보이지만 내부에서는 HTTP POST 요청을 보내고 폴링(polling)으로 결과를 받아옵니다.
+
+## FastAPI로 나만의 엔드포인트 만들기
+
+위 플랫폼들이 하는 일을 직접 구현하면 어떻게 될까요?
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+import torch
+
+app = FastAPI()
+model = torch.load("my_model.pt")
+
+class PredictRequest(BaseModel):
+    text: str
+
+@app.post("/predict")
+async def predict(request: PredictRequest):
+    result = model(request.text)
+    return {"prediction": result}
+```
+
+이 코드 몇 줄이 바로 "엔드포인트"입니다. 팀원이 요청하는 것은 바로 이런 HTTP 서버입니다. 그리고 이것을 제대로 만들려면 HTTP 프로토콜, 서버 아키텍처, 보안, 배포 방법을 이해해야 합니다.
+
+## 이 시리즈에서 배울 것
+
+```text
+[Section 01] HTTP 기초
+    ↓ HTTP 요청/응답 구조를 이해한다
+[Section 02] 서버 아키텍처
+    ↓ nginx + FastAPI + DB 구조를 구성한다
+[Section 03] 고급 HTTP & 실시간
+    ↓ WebSocket, SSE로 스트리밍을 구현한다
+[Section 04] 스케일링
+    ↓ 로드밸런서로 트래픽을 분산한다
+[Section 05-06] 프론트엔드
+    ↓ React로 모델과 대화하는 UI를 만든다
+[Section 07-09] 실전 풀스택
+    ↓ FastAPI + SQLite + React를 하나로 합친다
+```
+
+모델을 학습하는 능력은 이미 있습니다. 이제 그 모델을 세상에 연결하는 방법을 배울 차례입니다.
+
+## 핵심 정리
+
+- 모델 서빙은 학습과 다른 문제다. 동시성, 상태 관리, 오류 처리 방식이 근본적으로 다르다.
+- HTTP는 언어 독립적이고 생태계가 방대해 AI 서비스의 표준 인터페이스가 되었다.
+- OpenAI, HuggingFace, Replicate 등 모든 주요 ML 플랫폼은 HTTP REST API를 제공한다.
+- FastAPI로 `/predict` 엔드포인트를 만드는 것이 "엔드포인트 주세요"에 대한 답이다.
+- 이 시리즈는 HTTP 기초부터 풀스택 배포까지 AI 개발자에게 필요한 웹 기술을 다룬다.

@@ -1,0 +1,232 @@
+---
+title: nginx의 역할과 실전 구성
+description: upstream, server, location 블록을 포함한 실전 nginx.conf를 작성하고, SSL, gzip, 업로드 크기 제한까지 프로덕션 설정을 이해한다.
+sidebar:
+  order: 5
+learning_objectives:
+  - "nginx의 upstream, server, location 블록 구조를 이해하고 직접 작성할 수 있다"
+  - "Let's Encrypt를 이용한 SSL 설정과 HTTP→HTTPS 리다이렉트를 구성할 수 있다"
+  - "gzip 압축과 client_max_body_size 설정이 AI 서비스에서 어떤 영향을 미치는지 설명할 수 있다"
+prerequisites:
+  - "02-04 챕터 완료 (정적 vs 동적, 리버스 프록시 개념)"
+  - "Linux 기본 명령어 이해"
+estimated_minutes: 20
+references:
+  - title: "nginx — Full Example Configuration"
+    url: "https://www.nginx.com/resources/wiki/start/topics/examples/full/"
+    accessed: "2026-04-14"
+  - title: "Certbot — nginx 설치 가이드"
+    url: "https://certbot.eff.org/instructions?os=ubuntufocal&tab=standard"
+    accessed: "2026-04-14"
+  - title: "nginx — ngx_http_gzip_module"
+    url: "https://nginx.org/en/docs/http/ngx_http_gzip_module.html"
+    accessed: "2026-04-14"
+---
+
+## nginx 설정 파일 구조
+
+nginx의 설정은 블록(block) 단위로 계층을 이룹니다. `http` 블록 안에 `upstream`과 `server` 블록이 있고, `server` 안에 `location` 블록이 중첩됩니다.
+
+```text
+nginx.conf
+└── http {
+      ├── upstream api_backend { ... }   ← 백엔드 서버 그룹
+      └── server {                        ← 가상 호스트
+            ├── listen, server_name
+            └── location / { ... }        ← URL 경로별 처리
+                location /api/ { ... }
+          }
+    }
+```
+
+## 실전 nginx.conf 전체 예시
+
+AI 서비스(React + FastAPI)를 위한 프로덕션 수준 설정입니다.
+
+```nginx
+# /etc/nginx/nginx.conf
+
+user nginx;
+worker_processes auto;  # CPU 코어 수만큼 자동 설정
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;  # 워커당 최대 동시 연결 수
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    # 로그 포맷
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent"';
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    keepalive_timeout 65;
+
+    # ── gzip 압축 ──────────────────────────────────────────
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;          # 1KB 미만은 압축 안 함
+    gzip_proxied any;
+    gzip_comp_level 6;             # 1(빠름)~9(높은 압축) 중 균형값
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml;
+
+    # ── 업스트림 서버 그룹 ─────────────────────────────────
+    upstream fastapi_backend {
+        least_conn;                # 가장 적은 연결 수의 서버로 분산
+        server 127.0.0.1:8000;    # FastAPI/Uvicorn 단일 프로세스
+        # 수평 확장 시 아래처럼 추가:
+        # server 127.0.0.1:8001;
+        # server 127.0.0.1:8002;
+        keepalive 16;              # 업스트림 연결 재사용
+    }
+
+    # ── HTTP → HTTPS 리다이렉트 ────────────────────────────
+    server {
+        listen 80;
+        server_name example.com www.example.com;
+        return 301 https://$host$request_uri;
+    }
+
+    # ── HTTPS 메인 서버 ────────────────────────────────────
+    server {
+        listen 443 ssl;
+        server_name example.com www.example.com;
+
+        # SSL 인증서 (Let's Encrypt Certbot이 자동 생성)
+        ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         HIGH:!aNULL:!MD5;
+        ssl_session_cache   shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # 파일 업로드 크기 제한 (이미지/문서 업로드 AI 서비스)
+        client_max_body_size 50M;
+
+        # ── 정적 파일 (React 빌드 결과물) ──────────────────
+        location / {
+            root /var/www/html;
+            index index.html;
+            try_files $uri $uri/ /index.html;
+
+            # index.html은 캐싱 안 함
+            add_header Cache-Control "no-cache";
+        }
+
+        location /assets/ {
+            root /var/www/html;
+            # 해시 포함 파일명이므로 장기 캐싱 안전
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # ── API 프록시 (FastAPI) ────────────────────────────
+        location /api/ {
+            proxy_pass http://fastapi_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";         # keepalive 활성화
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # 추론 시간이 긴 엔드포인트 대비
+            proxy_read_timeout 300s;
+            proxy_connect_timeout 10s;
+            proxy_send_timeout 60s;
+        }
+    }
+}
+```
+
+## 핵심 블록 설명
+
+### upstream 블록
+
+백엔드 서버 그룹을 정의합니다. `proxy_pass`에서 이 이름을 참조합니다.
+
+```nginx
+upstream fastapi_backend {
+    least_conn;
+    server 127.0.0.1:8000;
+    keepalive 16;
+}
+```
+
+`keepalive 16`은 nginx가 업스트림 서버와의 연결을 최대 16개 재사용하도록 합니다. 요청마다 TCP 연결을 새로 맺는 비용을 없앱니다. `proxy_http_version 1.1`과 `proxy_set_header Connection ""`이 함께 있어야 keepalive가 동작합니다.
+
+### gzip 설정
+
+```nginx
+gzip on;
+gzip_types application/json text/css application/javascript;
+gzip_comp_level 6;
+```
+
+JSON API 응답을 gzip 압축하면 전송 크기가 60~80% 줄어듭니다. `comp_level 6`은 압축률과 CPU 사용의 균형점입니다. 이미지(JPEG, PNG)나 이미 압축된 바이너리는 `gzip_types`에 포함하지 않습니다. 재압축해도 크기 감소가 거의 없고 CPU만 낭비됩니다.
+
+### client_max_body_size
+
+```nginx
+client_max_body_size 50M;
+```
+
+기본값은 1MB입니다. 이미지, PDF, 오디오 파일을 업로드해 AI 모델로 처리하는 서비스라면 이 값을 키워야 합니다. 너무 크게 잡으면 대용량 요청으로 인한 메모리 고갈 위험이 있으므로, 실제 필요한 최대 크기만 허용합니다.
+
+## Let's Encrypt SSL 설정
+
+Certbot이 nginx 설정을 자동으로 수정해 SSL을 적용합니다.
+
+```bash
+# Certbot 설치 (Ubuntu)
+sudo apt install certbot python3-certbot-nginx
+
+# 인증서 발급 및 nginx 자동 설정
+sudo certbot --nginx -d example.com -d www.example.com
+
+# 자동 갱신 테스트 (인증서는 90일 유효, cron으로 자동 갱신)
+sudo certbot renew --dry-run
+```
+
+Certbot 실행 후 `/etc/nginx/nginx.conf`(또는 sites-enabled)에 `ssl_certificate` 경로가 자동 삽입됩니다. 이후 `ssl_protocols`와 `ssl_ciphers`만 보안 강화 목적으로 직접 조정합니다.
+
+## 설정 검증 및 재시작
+
+```bash
+# 설정 문법 검사 (재시작 전 필수)
+sudo nginx -t
+
+# 문법 오류 없으면:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+# 무중단 재로드 (기존 연결 유지하며 설정 반영)
+sudo nginx -s reload
+
+# 또는 systemd
+sudo systemctl reload nginx
+```
+
+`nginx -t`는 설정 파일 오류를 배포 전에 잡아줍니다. `-s reload`는 새 워커 프로세스를 띄우고 기존 요청이 끝난 뒤 구 워커를 종료합니다. 서비스 중단 없이 설정을 반영하는 표준 방법입니다.
+
+## 핵심 정리
+
+- nginx 설정은 `http → upstream → server → location` 계층으로 구성된다. `upstream`에서 백엔드 그룹을 정의하고 `location`에서 `proxy_pass`로 참조한다.
+- `location /`는 React 정적 파일을, `location /api/`는 FastAPI를 향한다. `try_files`로 SPA 폴백을 처리한다.
+- `keepalive`와 `proxy_http_version 1.1`을 함께 설정해 업스트림 연결을 재사용한다. TCP 핸드셰이크 비용을 없애 응답 시간을 단축한다.
+- gzip은 JSON·CSS·JS를 압축해 전송량을 60~80% 줄인다. 이미 압축된 이미지 파일은 제외한다.
+- `client_max_body_size`의 기본값은 1MB다. 파일 업로드 AI 서비스는 실제 필요한 최대 크기로 조정한다.
+- Let's Encrypt + Certbot으로 무료 SSL을 적용하고, `nginx -t` 후 `nginx -s reload`로 무중단 반영한다.

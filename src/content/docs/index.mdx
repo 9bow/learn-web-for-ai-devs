@@ -1,0 +1,73 @@
+---
+title: Web for AI Devs
+description: AI 모델 개발자를 위한 Web/HTTP 완전 정복 — HTTP부터 풀스택 실습까지
+template: splash
+hero:
+  tagline: AI 모델을 서비스로 만드는 데 필요한 웹 지식을 한 번에. HTTP 기초부터 React/FastAPI/SQLite 실습까지.
+  actions:
+    - text: 학습 시작하기
+      link: /web-for-ai-devs/01-http-foundations/01-01-why-web-for-ai/
+      icon: right-arrow
+      variant: primary
+    - text: 실습으로 바로 가기
+      link: /web-for-ai-devs/09-hands-on-fullstack/09-01-app-overview/
+      icon: rocket
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## 이 사이트는 누구를 위한 것인가
+
+모델은 만들 줄 알지만 "서비스"가 어색한 AI 개발자. `/predict` 엔드포인트 하나를 띄워본 적은 있어도,
+왜 nginx가 앞단에 있고, 왜 프론트엔드가 별도 서버로 돌아가며, SPA와 Next.js는 언제 쓰는지,
+LLM 토큰 스트리밍은 WebSocket과 SSE 중 뭘 써야 하는지 헷갈리는 분들을 위해 썼습니다.
+
+## 커리큘럼 개요
+
+<CardGrid>
+  <Card title="01. HTTP와 클라이언트-서버 (60분)" icon="open-book">
+    HTTP 메서드/상태코드, URL, 헤더, 쿠키/세션, CORS, HTTPS — 웹의 공용어 이해.
+  </Card>
+  <Card title="02. Web / WAS / DB (90분)" icon="puzzle">
+    3-Tier 아키텍처, nginx의 역할, 정적/동적 분리, 리버스 프록시.
+  </Card>
+  <Card title="03. 고급 HTTP와 실시간 통신 (90분)" icon="rocket">
+    WebSocket, SSE, Long Polling, gRPC, HTTP/2 — LLM 토큰 스트리밍 패턴 포함.
+  </Card>
+  <Card title="04. 로드밸런서와 스케일링 (75분)" icon="setting">
+    L4/L7 LB, 수평 확장, Stateless 설계, AI 추론 서비스 토폴로지.
+  </Card>
+  <Card title="05. 프론트엔드의 진화 (100분)" icon="laptop">
+    MPA → SPA, JavaScript/TypeScript, CSR vs SSR vs SSG.
+  </Card>
+  <Card title="06. React와 Next.js (100분)" icon="star">
+    React 핵심, 왜 Frontend 서버가 필요한가, Next.js의 역할.
+  </Card>
+  <Card title="07. FastAPI 백엔드 (100분)" icon="rocket">
+    REST 설계, ASGI/Uvicorn/Gunicorn, FastAPI + nginx 구성, 인증/인가.
+  </Card>
+  <Card title="08. SQLite와 ORM (75분)" icon="document">
+    SQLite 쓰임새, SQLAlchemy, 마이그레이션, Postgres 전환 시점.
+  </Card>
+  <Card title="09. 풀스택 실습 (120분)" icon="pencil">
+    Claude Code로 React + FastAPI + SQLite 앱을 직접 만들고 nginx로 통합.
+  </Card>
+  <Card title="10. Best Practice (80분)" icon="approve-check-circle">
+    보안, 성능, 관측성 — 배포 전 체크리스트.
+  </Card>
+</CardGrid>
+
+## 학습 방식
+
+- **개념은 짧게, 예시는 구체적으로**: 각 챕터는 20~40분 분량. 다이어그램과 비교표 위주.
+- **AI 개발자 관점의 번역**: 모델 서빙, 추론 파이프라인, ML Ops 관점에서 웹 개념을 다시 해석.
+- **Claude Code와 함께하는 실습**: Section 09에서 AI 페어 프로그래밍으로 풀스택 앱을 완성.
+
+## 완주 후 얻게 되는 것
+
+1. 내가 만든 모델을 **웹 서비스로 감싸서** 사용자에게 전달할 수 있다.
+2. 왜 nginx가 필요하고 어떻게 FastAPI와 연결되는지 **아키텍처 다이어그램을 그릴 수 있다**.
+3. LLM 토큰 스트리밍 같은 **실시간 통신 패턴**을 선택하고 구현할 수 있다.
+4. 프론트엔드 엔지니어와 **공통 언어**로 대화할 수 있다 (SPA, SSR, CORS, JWT 등).
+5. Claude Code를 활용해 **작은 풀스택 프로토타입을 빠르게** 만들 수 있다.

@@ -1,0 +1,227 @@
+---
+title: SQLite의 한계와 Postgres로의 이전 시점
+description: SQLite에서 PostgreSQL로 전환해야 하는 신호, 호환성 주의사항, 마이그레이션 전략, pgvector 활용을 다룬다
+sidebar:
+  order: 4
+learning_objectives:
+  - "SQLite에서 PostgreSQL 전환이 필요한 신호를 파악한다"
+  - "두 DB의 호환성 차이와 주의사항을 이해한다"
+  - "pgvector로 벡터 검색을 PostgreSQL에서 구현한다"
+prerequisites:
+  - "SQLite 기본 이해 (08-01)"
+  - "SQLAlchemy ORM (08-02)"
+  - "Alembic 마이그레이션 (08-03)"
+estimated_minutes: 20
+references:
+  - title: "PostgreSQL 공식 문서"
+    url: "https://www.postgresql.org/docs/"
+    accessed: "2026-04-14"
+  - title: "pgvector GitHub"
+    url: "https://github.com/pgvector/pgvector"
+    accessed: "2026-04-14"
+  - title: "SQLAlchemy PostgreSQL 방언"
+    url: "https://docs.sqlalchemy.org/en/20/dialects/postgresql.html"
+    accessed: "2026-04-14"
+---
+
+SQLite로 빠르게 시작했다면 언제 PostgreSQL로 넘어가야 할까? 너무 일찍 전환하면 불필요한 복잡도를 추가하고, 너무 늦으면 데이터 손실이나 장애가 발생할 수 있다.
+
+## 전환 신호
+
+다음 중 하나라도 해당하면 PostgreSQL 전환을 고려할 시점이다.
+
+```text
+신호 1: "database is locked" 에러가 자주 발생한다
+  → 여러 FastAPI 워커 또는 백그라운드 작업이 동시에 쓰기를 시도 중
+
+신호 2: 데이터 파일이 수 GB를 넘어간다
+  → SQLite는 파일 크기 제한이 없지만 성능이 저하됨
+
+신호 3: 여러 서버가 같은 DB에 접근해야 한다
+  → SQLite는 단일 파일이므로 네트워크 공유 불안정
+
+신호 4: 전문 검색(Full-text Search)이 필요하다
+  → PostgreSQL의 tsvector/GIN 인덱스가 훨씬 강력
+
+신호 5: 벡터 유사도 검색이 필요하다 (RAG, 임베딩 검색)
+  → pgvector 확장이 필요 (SQLite에는 없음)
+
+신호 6: 복잡한 JSON 쿼리, 배열 타입이 필요하다
+  → PostgreSQL의 JSONB, 배열 타입이 필요
+```
+
+## SQLAlchemy로 전환이 쉬운 이유
+
+SQLAlchemy ORM을 사용했다면 DB URL만 바꾸면 된다.
+
+```python
+# database.py
+
+# SQLite (개발)
+DATABASE_URL = "sqlite:///./app.db"
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},
+)
+
+# PostgreSQL (프로덕션) — URL만 교체
+DATABASE_URL = "postgresql://user:password@localhost:5432/mydb"
+engine = create_engine(DATABASE_URL)  # connect_args 불필요
+```
+
+환경변수로 전환 지점을 제어한다.
+
+```python
+import os
+from sqlalchemy import create_engine
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+
+# PostgreSQL 연결 풀 설정 (SQLite에서는 의미 없음)
+if DATABASE_URL.startswith("postgresql"):
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,  # 연결 유효성 사전 확인
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+```
+
+## 호환성 주의사항
+
+SQLAlchemy ORM은 대부분 추상화하지만, 일부 차이가 있다.
+
+| 항목 | SQLite | PostgreSQL |
+|------|--------|-----------|
+| AUTOINCREMENT | `INTEGER PRIMARY KEY` | `SERIAL` 또는 `IDENTITY` |
+| 불리언 | 0/1로 저장 | 네이티브 `BOOLEAN` |
+| 날짜 타입 | 문자열로 저장 | 네이티브 `TIMESTAMP` |
+| LIKE 대소문자 | 기본 무시 | 기본 구분 (ILIKE 사용) |
+| JSON | TEXT로 저장 | 네이티브 `JSONB` |
+| 동시 연결 수 | 사실상 1 (쓰기) | 수백~수천 |
+
+```python
+# LIKE 쿼리 — PostgreSQL에서 대소문자 구분
+# SQLite: WHERE name LIKE '%bert%' (대소문자 무시)
+# PostgreSQL: WHERE name ILIKE '%bert%' (대소문자 무시)
+
+# SQLAlchemy에서 이식 가능하게 작성
+from sqlalchemy import func
+
+# 방법 1: func.lower() 사용 (양쪽 DB 호환)
+results = db.query(Experiment).filter(
+    func.lower(Experiment.name).like(f"%{keyword.lower()}%")
+).all()
+```
+
+## 마이그레이션 전략
+
+데이터를 SQLite에서 PostgreSQL로 옮기는 절차:
+
+```bash
+# 1. PostgreSQL 설치 및 DB 생성
+createdb myapp_db
+
+# 2. pip 드라이버 설치
+pip install psycopg2-binary
+
+# 3. 환경변수 변경
+export DATABASE_URL="postgresql://user:password@localhost:5432/myapp_db"
+
+# 4. Alembic으로 스키마 생성
+alembic upgrade head
+
+# 5. 데이터 이전 (Python 스크립트)
+```
+
+```python
+# migrate_data.py
+import sqlite3
+import psycopg2
+from psycopg2.extras import execute_values
+
+sqlite_conn = sqlite3.connect("app.db")
+sqlite_conn.row_factory = sqlite3.Row
+
+pg_conn = psycopg2.connect("postgresql://user:password@localhost:5432/myapp_db")
+
+# 테이블별 이전
+with pg_conn.cursor() as cur:
+    rows = sqlite_conn.execute("SELECT * FROM experiments").fetchall()
+    if rows:
+        execute_values(
+            cur,
+            "INSERT INTO experiments (id, name, accuracy, owner_id, created_at) VALUES %s",
+            [(r["id"], r["name"], r["accuracy"], r["owner_id"], r["created_at"]) for r in rows],
+        )
+
+pg_conn.commit()
+pg_conn.close()
+sqlite_conn.close()
+```
+
+## pgvector: PostgreSQL에서 벡터 검색
+
+AI 엔지니어에게 PostgreSQL의 가장 큰 장점 중 하나가 pgvector다. LLM 임베딩을 DB에 저장하고 유사도 검색을 할 수 있다.
+
+```bash
+# pgvector 설치 (PostgreSQL 확장)
+# Homebrew: brew install pgvector
+# 또는 Docker 이미지: pgvector/pgvector:pg16
+
+pip install pgvector sqlalchemy
+```
+
+```python
+# models.py — pgvector 사용
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column, Integer, String, Text
+from database import Base
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(1536))  # OpenAI text-embedding-3-small 차원
+```
+
+```python
+# 임베딩 저장
+def store_document(db: Session, content: str, embedding: list[float]) -> Document:
+    doc = Document(content=content, embedding=embedding)
+    db.add(doc)
+    db.flush()
+    return doc
+
+
+# 유사도 검색 (코사인 유사도)
+def search_similar(db: Session, query_embedding: list[float], top_k: int = 5):
+    return (
+        db.query(Document)
+        .order_by(Document.embedding.cosine_distance(query_embedding))
+        .limit(top_k)
+        .all()
+    )
+```
+
+```sql
+-- pgvector 인덱스 (대용량 데이터에서 ANN 검색)
+CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- 또는 HNSW (더 빠른 검색, 더 많은 메모리)
+CREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops);
+```
+
+## 핵심 정리
+
+- **동시 쓰기 에러, 다중 서버, 벡터 검색이 필요하면 전환 시점이다** — 너무 일찍 전환할 필요는 없다
+- **SQLAlchemy ORM을 사용했다면 DATABASE_URL 교체만으로 대부분 전환된다** — SQL 직접 작성보다 이식성이 높다
+- **LIKE vs ILIKE, 불리언 처리 등 미묘한 차이를 확인한다** — 특히 대소문자 검색에 주의한다
+- **데이터 이전은 Alembic으로 스키마를 먼저 만들고, 스크립트로 데이터를 복사한다** — 순서가 중요하다
+- **pgvector는 PostgreSQL에서 벡터 유사도 검색을 가능하게 한다** — RAG 파이프라인에서 별도 벡터 DB 없이 활용할 수 있다

@@ -1,0 +1,228 @@
+---
+title: "FastAPI 개요: ASGI, Pydantic, 자동 문서화"
+description: FastAPI의 핵심 구성 요소인 ASGI, Pydantic 유효성 검사, 자동 OpenAPI 문서화를 이해한다
+sidebar:
+  order: 2
+learning_objectives:
+  - "ASGI와 WSGI의 차이를 설명할 수 있다"
+  - "Pydantic으로 요청/응답 스키마를 정의한다"
+  - "FastAPI의 자동 문서화(/docs, /redoc)를 활용한다"
+prerequisites:
+  - "Python 타입 힌트 기본 이해"
+  - "HTTP 요청/응답 구조"
+estimated_minutes: 20
+references:
+  - title: "FastAPI 공식 문서"
+    url: "https://fastapi.tiangolo.com"
+    accessed: "2026-04-14"
+  - title: "Pydantic 공식 문서"
+    url: "https://docs.pydantic.dev"
+    accessed: "2026-04-14"
+  - title: "ASGI 스펙"
+    url: "https://asgi.readthedocs.io/en/latest/"
+    accessed: "2026-04-14"
+---
+
+FastAPI는 2018년 Sebastián Ramírez가 만든 Python 웹 프레임워크다. Flask나 Django보다 훨씬 나중에 나왔지만, AI/ML 서비스 영역에서 빠르게 사실상의 표준이 되었다. 이유는 세 가지다: **비동기 네이티브**, **타입 기반 유효성 검사**, **자동 문서화**.
+
+## WSGI vs ASGI
+
+Python 웹 프레임워크는 오랫동안 WSGI(Web Server Gateway Interface) 위에서 동작했다. Flask, Django가 대표적이다.
+
+```text
+WSGI 모델 (동기)
+┌──────────┐     요청     ┌──────────┐     요청     ┌──────────┐
+│  nginx   │ ──────────► │ Gunicorn │ ──────────► │  Flask   │
+│          │ ◄────────── │  (WSGI)  │ ◄────────── │  앱 코드  │
+└──────────┘     응답     └──────────┘     응답     └──────────┘
+  하나의 요청이 처리되는 동안 워커 프로세스가 블로킹된다
+```
+
+ASGI(Asynchronous Server Gateway Interface)는 Python의 `async/await`를 지원하도록 설계된 표준이다.
+
+```text
+ASGI 모델 (비동기)
+┌──────────┐     요청     ┌──────────┐     요청     ┌──────────┐
+│  nginx   │ ──────────► │ Uvicorn  │ ──────────► │ FastAPI  │
+│          │ ◄────────── │  (ASGI)  │ ◄────────── │  앱 코드  │
+└──────────┘     응답     └──────────┘     응답     └──────────┘
+  await 중에 이벤트 루프가 다른 요청을 처리할 수 있다
+```
+
+핵심 차이는 I/O 대기 시간의 처리 방식이다. DB 쿼리나 외부 API 호출처럼 기다리는 시간이 많은 작업에서 ASGI는 같은 프로세스로 더 많은 동시 요청을 처리할 수 있다.
+
+```python
+import asyncio
+from fastapi import FastAPI
+
+app = FastAPI()
+
+# 동기 핸들러 — FastAPI가 스레드풀에서 실행
+@app.get("/sync-example")
+def sync_handler():
+    import time
+    time.sleep(1)  # 블로킹! 워커 점유
+    return {"status": "done"}
+
+# 비동기 핸들러 — 이벤트 루프에서 실행
+@app.get("/async-example")
+async def async_handler():
+    await asyncio.sleep(1)  # 논블로킹! 다른 요청 처리 가능
+    return {"status": "done"}
+```
+
+## Pydantic으로 스키마 정의하기
+
+FastAPI는 Pydantic v2를 사용해 요청 본문, 쿼리 파라미터, 응답을 검증한다.
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
+
+class Item(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    price: float = Field(..., gt=0)
+    description: Optional[str] = None
+    tags: list[str] = []
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name은 공백일 수 없습니다")
+        return v.strip()
+
+app = FastAPI()
+
+@app.post("/items/", response_model=Item)
+async def create_item(item: Item):
+    # item은 이미 유효성 검사가 완료된 상태
+    return item
+```
+
+잘못된 요청을 보내면 FastAPI가 자동으로 422 응답을 생성한다.
+
+```http
+POST /items/ HTTP/1.1
+Content-Type: application/json
+
+{"name": "", "price": -5}
+```
+
+```http
+HTTP/1.1 422 Unprocessable Entity
+
+{
+  "detail": [
+    {
+      "type": "value_error",
+      "loc": ["body", "name"],
+      "msg": "name은 공백일 수 없습니다",
+      "input": ""
+    },
+    {
+      "type": "greater_than",
+      "loc": ["body", "price"],
+      "msg": "Input should be greater than 0",
+      "input": -5
+    }
+  ]
+}
+```
+
+Pydantic이 중요한 이유는 **타입 검증 + JSON 스키마 자동 생성** 을 동시에 해결하기 때문이다. `Item` 모델 하나를 정의하면 FastAPI가 OpenAPI 스펙을 자동으로 만든다.
+
+## 자동 문서화
+
+FastAPI를 실행하면 두 개의 문서 UI가 자동으로 제공된다.
+
+```text
+http://localhost:8000/docs    → Swagger UI (대화형 API 테스트 가능)
+http://localhost:8000/redoc   → ReDoc (읽기 좋은 문서)
+http://localhost:8000/openapi.json → OpenAPI 스펙 (JSON)
+```
+
+문서를 더 풍부하게 만들려면 메타데이터를 추가한다.
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI(
+    title="AI Inference API",
+    description="텍스트 분류 및 생성 모델 서빙 API",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+@app.post(
+    "/predict",
+    summary="텍스트 분류 예측",
+    description="입력 텍스트에 대해 감성 분석을 수행합니다.",
+    response_description="예측 레이블과 신뢰도 점수",
+    tags=["inference"],
+)
+async def predict(text: str) -> dict:
+    ...
+```
+
+## 의존성 주입
+
+FastAPI의 `Depends`는 DB 세션, 인증 토큰, 설정값 등을 핸들러에 주입하는 깔끔한 방법이다.
+
+```python
+from fastapi import FastAPI, Depends, HTTPException, Header
+from typing import Annotated
+
+app = FastAPI()
+
+async def verify_api_key(x_api_key: Annotated[str, Header()]) -> str:
+    if x_api_key != "secret-key":
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return x_api_key
+
+@app.get("/protected")
+async def protected_route(api_key: Annotated[str, Depends(verify_api_key)]):
+    return {"message": "접근 허용됨"}
+```
+
+의존성은 중첩될 수 있고, 테스트 시 쉽게 교체할 수 있다.
+
+## 빠른 시작
+
+```bash
+pip install fastapi uvicorn[standard]
+```
+
+```python
+# main.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+class Item(BaseModel):
+    name: str
+    price: float
+
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "Hello FastAPI"}
+
+@app.post("/items/")
+async def create_item(item: Item):
+    return item
+```
+
+```bash
+uvicorn main:app --reload
+# http://localhost:8000/docs 에서 즉시 확인 가능
+```
+
+## 핵심 정리
+
+- **ASGI 기반** — `async/await`를 네이티브 지원, I/O 집약적 서비스에 유리하다
+- **Pydantic 통합** — 타입 힌트만으로 유효성 검사와 JSON 스키마를 동시에 얻는다
+- **자동 문서화** — `/docs`와 `/redoc`이 코드와 항상 동기화된 상태로 제공된다
+- **의존성 주입** — `Depends`로 인증, DB, 설정을 핸들러에 깔끔하게 주입한다

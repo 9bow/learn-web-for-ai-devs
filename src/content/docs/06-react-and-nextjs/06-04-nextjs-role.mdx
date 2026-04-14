@@ -1,0 +1,214 @@
+---
+title: "Next.js의 역할: 라우팅, SSR/SSG/ISR, Server Components"
+description: Next.js App Router의 파일 기반 라우팅, 렌더링 전략, React Server Components, API Routes를 정리한다
+sidebar:
+  order: 4
+learning_objectives:
+  - "App Router의 파일 기반 라우팅 구조를 이해한다"
+  - "SSR/SSG/ISR의 차이와 선택 기준을 설명한다"
+  - "React Server Components와 Client Components의 차이를 구분한다"
+prerequisites:
+  - "SSR과 Node 서버의 필요성 (06-03)"
+  - "React 컴포넌트 기본 (06-01, 06-02)"
+estimated_minutes: 20
+references:
+  - title: "Next.js 공식 문서 - App Router"
+    url: "https://nextjs.org/docs/app"
+    accessed: "2026-04-14"
+  - title: "Next.js 공식 문서 - Rendering"
+    url: "https://nextjs.org/docs/app/building-your-application/rendering"
+    accessed: "2026-04-14"
+---
+
+Next.js는 React 위에서 동작하는 풀스택 프레임워크다. 라우팅, 렌더링 전략, 번들링, 이미지 최적화 등을 기본 제공한다. App Router(Next.js 13+)가 현재 표준이다.
+
+## 파일 기반 라우팅
+
+App Router는 `app/` 디렉터리 구조가 곧 URL 구조다.
+
+```text
+app/
+├── layout.tsx          → 모든 페이지 공통 레이아웃
+├── page.tsx            → / (루트)
+├── about/
+│   └── page.tsx        → /about
+├── blog/
+│   ├── page.tsx        → /blog
+│   └── [slug]/
+│       └── page.tsx    → /blog/my-post (동적 세그먼트)
+└── api/
+    └── users/
+        └── route.ts    → /api/users (API Route)
+```
+
+동적 세그먼트는 대괄호로 표현하며, 컴포넌트에서 params로 접근한다.
+
+```tsx
+// app/blog/[slug]/page.tsx
+interface Props {
+  params: { slug: string }
+}
+
+export default async function BlogPost({ params }: Props) {
+  const post = await fetchPost(params.slug)
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <p>{post.content}</p>
+    </article>
+  )
+}
+```
+
+## SSR / SSG / ISR
+
+Next.js는 페이지(또는 컴포넌트)마다 렌더링 전략을 다르게 설정할 수 있다.
+
+### SSR (Server-Side Rendering)
+
+요청이 올 때마다 서버에서 렌더링한다.
+
+```tsx
+// App Router에서는 async 컴포넌트가 기본적으로 SSR
+export default async function Dashboard() {
+  // 요청마다 최신 데이터 조회
+  const data = await fetch('https://api.example.com/stats', {
+    cache: 'no-store'  // 캐시 비활성화 = SSR
+  })
+  const stats = await data.json()
+
+  return <div>활성 사용자: {stats.activeUsers}</div>
+}
+```
+
+### SSG (Static Site Generation)
+
+빌드 타임에 HTML을 생성한다. 배포 후 콘텐츠가 변하지 않는다.
+
+```tsx
+export default async function AboutPage() {
+  // 빌드 시 한 번만 실행 (기본 동작)
+  const content = await fetch('https://api.example.com/about').then(r => r.json())
+
+  return <div>{content.text}</div>
+}
+
+// 동적 경로의 SSG: 어떤 slug를 미리 빌드할지 알려줌
+export async function generateStaticParams() {
+  const posts = await fetchAllPosts()
+  return posts.map(post => ({ slug: post.slug }))
+}
+```
+
+### ISR (Incremental Static Regeneration)
+
+SSG의 확장판. 주기적으로 백그라운드에서 페이지를 재생성한다.
+
+```tsx
+export default async function PricingPage() {
+  const prices = await fetch('https://api.example.com/prices', {
+    next: { revalidate: 3600 }  // 1시간마다 재검증
+  })
+  const data = await prices.json()
+
+  return <div>{/* 가격 정보 */}</div>
+}
+```
+
+### 렌더링 전략 선택 기준
+
+| 전략 | 데이터 특성 | 예시 |
+|------|------------|------|
+| SSG | 빌드 후 변경 없음 | 회사 소개, 법적 고지 |
+| ISR | 주기적 업데이트 | 블로그, 상품 목록 |
+| SSR | 요청마다 달라짐 | 대시보드, 개인화 피드 |
+| CSR | 인터랙션이 핵심 | 에디터, 실시간 협업 |
+
+## React Server Components
+
+App Router의 핵심 개념이다. 컴포넌트를 서버에서만 실행되는 것과 클라이언트에서 실행되는 것으로 분리한다.
+
+```tsx
+// Server Component (기본값) — 'use client' 없음
+// 서버에서만 실행되므로 DB, API Key, 파일 시스템 직접 접근 가능
+import { db } from '@/lib/db'
+
+export default async function PostList() {
+  const posts = await db.query('SELECT * FROM posts')  // 서버에서만 실행
+
+  return (
+    <ul>
+      {posts.map(post => <li key={post.id}>{post.title}</li>)}
+    </ul>
+  )
+}
+```
+
+```tsx
+// Client Component — 'use client' 선언 필수
+'use client'
+
+import { useState } from 'react'
+
+export default function LikeButton({ postId }: { postId: number }) {
+  const [liked, setLiked] = useState(false)
+
+  return (
+    <button onClick={() => setLiked(!liked)}>
+      {liked ? '❤️' : '🤍'}
+    </button>
+  )
+}
+```
+
+### Server vs Client Component 비교
+
+| 기능 | Server Component | Client Component |
+|------|-----------------|-----------------|
+| useState / useEffect | 불가 | 가능 |
+| DB 직접 접근 | 가능 | 불가 |
+| API Key 노출 위험 | 없음 | 있음 |
+| 번들 크기 | 0 (JS 미포함) | 포함됨 |
+| 브라우저 API | 불가 | 가능 |
+
+**규칙:** 서버 컴포넌트 안에 클라이언트 컴포넌트를 넣는 것은 가능하다. 반대(클라이언트 컴포넌트 안에 서버 컴포넌트)는 직접적으로 불가능하다.
+
+## API Routes
+
+Next.js 안에서 간단한 API 엔드포인트를 만들 수 있다. Python FastAPI와 달리 별도 서버 없이 동일 프로젝트 안에서 처리한다.
+
+```typescript
+// app/api/users/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+
+export async function GET(request: NextRequest) {
+  const users = await fetchUsersFromDB()
+  return NextResponse.json(users)
+}
+
+export async function POST(request: NextRequest) {
+  const body = await request.json()
+  const user = await createUser(body)
+  return NextResponse.json(user, { status: 201 })
+}
+```
+
+AI 엔지니어 관점에서 API Routes의 주요 용도:
+
+```text
+- FastAPI 호출을 프록시 (CORS 처리, API Key 숨김)
+- 간단한 웹훅 처리
+- 폼 제출 처리
+- LLM 스트리밍 응답을 클라이언트로 중계
+```
+
+복잡한 비즈니스 로직과 ML 처리는 FastAPI에, UI 관련 API는 Next.js API Routes에 두는 것이 일반적이다.
+
+## 핵심 정리
+
+- **App Router는 파일 경로가 URL이다** — `app/blog/[slug]/page.tsx` → `/blog/my-post`
+- **SSG는 빌드 시, ISR은 주기적으로, SSR은 요청마다 렌더링한다** — `cache: 'no-store'` / `revalidate` / 기본값으로 제어한다
+- **Server Components는 서버에서만 실행된다** — JS 번들 크기 0, DB 직접 접근 가능, useState 불가
+- **Client Components는 `'use client'` 를 선언한다** — 인터랙션, 브라우저 API, Hook 사용 가능
+- **API Routes는 동일 프로젝트 내 엔드포인트다** — FastAPI 프록시나 간단한 처리에 활용한다

@@ -1,0 +1,23 @@
+---
+interface Ref {
+  title: string;
+  url: string;
+  accessed?: string;
+}
+interface Props {
+  items: Ref[];
+}
+const { items } = Astro.props;
+---
+
+<section class="references">
+  <h3>참고 자료</h3>
+  <ul>
+    {items.map((r) => (
+      <li>
+        <a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a>
+        {r.accessed && <span style="color: var(--sl-color-gray-3); font-size: 0.85em;"> (조회: {r.accessed})</span>}
+      </li>
+    ))}
+  </ul>
+</section>

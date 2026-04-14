@@ -1,0 +1,185 @@
+---
+title: "Long Polling vs WebSocket vs SSE 비교와 선택 기준"
+description: 세 가지 실시간 통신 방식의 동작 원리를 비교하고, 시나리오별 최적 선택 기준을 정리한다.
+sidebar:
+  order: 3
+learning_objectives:
+  - "Short Polling, Long Polling, WebSocket, SSE의 동작 방식 차이를 설명할 수 있다"
+  - "각 방식의 오버헤드, 프록시 호환성, 재연결 특성을 비교할 수 있다"
+  - "주어진 AI 서비스 요구사항에 맞는 통신 방식을 선택할 수 있다"
+prerequisites:
+  - "03-01 WebSocket 기초"
+  - "03-02 Server-Sent Events"
+estimated_minutes: 18
+references:
+  - title: "MDN Web Docs — Long polling"
+    url: "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"
+    accessed: "2026-04-14"
+  - title: "RFC 6202 — Known Issues and Best Practices for the Use of Long Polling and Streaming"
+    url: "https://datatracker.ietf.org/doc/html/rfc6202"
+    accessed: "2026-04-14"
+  - title: "WHATWG — Server-sent events"
+    url: "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+    accessed: "2026-04-14"
+---
+
+실시간처럼 보이는 웹 기능은 실제로 여러 다른 메커니즘으로 구현된다. "서버가 클라이언트에 데이터를 보낸다"는 같은 목표를 달성하는 방법이 Short Polling부터 WebSocket까지 다양하게 존재하며, 선택에 따라 인프라 복잡도와 사용자 경험이 크게 달라진다.
+
+## 각 방식의 동작 원리
+
+### Short Polling
+
+```text
+클라이언트                        서버
+   |                               |
+   |---- GET /status ------------->|
+   |<--- 200 (데이터 없음) --------|
+   |                               |
+   [2초 대기]
+   |                               |
+   |---- GET /status ------------->|
+   |<--- 200 (데이터 있음!) -------|
+```
+
+가장 단순하다. 주기적으로 HTTP 요청을 반복한다. 구현이 쉽지만 대부분의 요청이 빈 응답을 받는다.
+
+### Long Polling
+
+```text
+클라이언트                        서버
+   |                               |
+   |---- GET /wait --------------->|
+   |                    [데이터 대기 중...]
+   |                    [이벤트 발생!]
+   |<--- 200 (데이터) -------------|
+   |                               |
+   |---- GET /wait --------------->|  즉시 재요청
+   |                    [대기 중...]
+```
+
+서버가 데이터가 생길 때까지 응답을 보류한다. 데이터 수신 즉시 재연결한다. Short Polling보다 효율적이지만 연결 수가 많으면 서버 스레드/프로세스 점유 문제가 생긴다.
+
+### Server-Sent Events
+
+```text
+클라이언트                        서버
+   |                               |
+   |---- GET /stream ------------->|
+   |<--- 200 (스트림 시작) --------|
+   |<--- data: 토큰1 --------------|
+   |<--- data: 토큰2 --------------|
+   |<--- data: 토큰3 --------------|
+   |         [연결 유지]
+```
+
+단일 HTTP 연결을 열어두고 서버가 지속적으로 데이터를 푸시한다. 자동 재연결 내장.
+
+### WebSocket
+
+```text
+클라이언트                        서버
+   |---- HTTP Upgrade ------------>|
+   |<--- 101 Switching Protocols --|
+   |<======= WS 프레임 ============>| 양방향
+   |=======> WS 프레임 ============>|
+   |         [연결 유지]
+```
+
+프로토콜을 전환해 양방향 프레임 통신을 한다.
+
+## 비교 매트릭스
+
+| 항목 | Short Polling | Long Polling | SSE | WebSocket |
+|------|:---:|:---:|:---:|:---:|
+| 통신 방향 | 단방향 | 단방향 | 단방향 | 양방향 |
+| 프로토콜 | HTTP | HTTP | HTTP | WS |
+| 연결 오버헤드 | 높음 | 중간 | 낮음 | 낮음 |
+| HTTP 헤더 반복 | 매번 | 매번 | 최초 1회 | 최초 1회 |
+| 프록시 호환성 | 완벽 | 완벽 | 대부분 | 설정 필요 |
+| CDN 통과 | 완벽 | 완벽 | 대부분 | 제한적 |
+| 자동 재연결 | 직접 구현 | 직접 구현 | 브라우저 내장 | 직접 구현 |
+| 지연(Latency) | 폴링 주기 | 낮음 | 낮음 | 가장 낮음 |
+| 구현 복잡도 | 낮음 | 중간 | 낮음 | 높음 |
+| 브라우저 지원 | 완벽 | 완벽 | IE 제외 완벽 | 완벽 |
+
+## 시나리오별 선택 가이드
+
+### LLM 토큰 스트리밍
+
+```text
+선택: SSE
+
+이유:
+- 서버→클라이언트 단방향으로 충분
+- HTTP POST로 프롬프트 전송, SSE로 토큰 수신
+- CDN/nginx 설정 최소화
+- OpenAI, Anthropic 모두 이 방식 사용
+```
+
+### 실시간 채팅 (다자간)
+
+```text
+선택: WebSocket
+
+이유:
+- 사용자가 언제든 메시지를 보낼 수 있어야 함 (양방향)
+- 연결당 낮은 지연 필요
+- 서버 메시지 브로드캐스트가 자연스러움
+```
+
+### 모델 학습/파인튜닝 진행률 표시
+
+```text
+선택: SSE (또는 Long Polling)
+
+이유:
+- 서버→클라이언트 단방향
+- 폴링 주기(5~10초)로도 충분히 반응적
+- 학습 잡이 완료되면 연결 종료
+- Long Polling은 서버 구현이 더 단순할 수 있음
+```
+
+### 실시간 알림 (배치 추론 완료 알림 등)
+
+```text
+선택: SSE
+
+이유:
+- 알림은 서버→클라이언트 단방향
+- 자동 재연결로 장시간 대기 안정적
+- 사용자당 하나의 SSE 연결로 모든 알림 전달
+```
+
+### 음성 스트리밍 AI 어시스턴트
+
+```text
+선택: WebSocket
+
+이유:
+- 마이크 오디오를 실시간으로 서버 전송
+- 동시에 서버 응답(전사 또는 TTS)을 실시간 수신
+- 명백한 양방향 요구사항
+```
+
+## 인프라 관점의 고려사항
+
+```text
+CDN 레이어 통과:
+  Short Polling  → 캐싱 가능 (주의 필요)
+  Long Polling   → 일반적으로 통과
+  SSE            → 대부분 통과 (버퍼링 주의)
+  WebSocket      → CDN 지원 여부 확인 필요 (CloudFront, Cloudflare 지원)
+
+로드밸런서:
+  Short/Long Polling → L7 LB 표준 동작
+  SSE               → L7 LB, 타임아웃 연장 필요
+  WebSocket         → Sticky Session 또는 L4 LB 고려
+```
+
+## 핵심 정리
+
+- Short Polling은 구현이 가장 쉽지만 불필요한 요청이 많아 비효율적이다
+- Long Polling은 HTTP 인프라와 호환되면서 Short Polling보다 효율적이다
+- SSE는 단방향 스트리밍에 최적이며 LLM 토큰 스트리밍의 표준 방식이다
+- WebSocket은 양방향 통신이 필요한 경우에만 선택한다. 복잡도 비용이 있다
+- 프록시/CDN 호환성과 재연결 처리는 실제 운영 환경에서 중요한 선택 기준이다

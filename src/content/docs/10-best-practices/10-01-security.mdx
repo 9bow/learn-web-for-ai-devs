@@ -1,0 +1,185 @@
+---
+title: "보안"
+description: 웹 서비스에서 반드시 알아야 할 보안 위협과 FastAPI 기반 방어 전략을 정리한다.
+sidebar:
+  order: 1
+learning_objectives:
+  - "CORS, CSRF, SQL Injection, XSS 각 공격의 원리와 방어법을 설명할 수 있다"
+  - "비밀번호 해싱과 JWT 토큰 보안을 올바르게 구현할 수 있다"
+  - "rate limiting으로 무차별 대입 공격을 방어할 수 있다"
+prerequisites:
+  - "FastAPI 기초 (섹션 07)"
+  - "HTTP 기초 (섹션 01)"
+estimated_minutes: 25
+references:
+  - title: "OWASP Top Ten"
+    url: "https://owasp.org/www-project-top-ten/"
+    accessed: "2026-04-14"
+  - title: "FastAPI 보안 가이드"
+    url: "https://fastapi.tiangolo.com/tutorial/security/"
+    accessed: "2026-04-14"
+  - title: "passlib 문서"
+    url: "https://passlib.readthedocs.io/en/stable/"
+    accessed: "2026-04-14"
+---
+
+ML 모델을 서빙하는 서비스도 결국은 웹 서비스다. 추론 속도를 1ms 줄이는 것도 중요하지만, 인증 우회 한 방에 전체 시스템이 뚫리면 의미가 없다. 이 챕터는 **OWASP Top 10** 기준으로 AI/웹 서비스에서 자주 만나는 보안 위협과 FastAPI 기반 대응법을 다룬다.
+
+## CORS — 교차 출처 리소스 공유
+
+CORS는 브라우저가 다른 origin의 API를 호출할 때 적용하는 정책이다. 잘못 설정하면 악성 사이트가 로그인된 사용자 대신 API를 호출할 수 있다.
+
+```python
+# 나쁜 설정 — 모든 origin 허용
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True)
+# allow_credentials=True와 allow_origins=["*"] 조합은 브라우저가 거부함
+# 게다가 의도치 않은 origin의 요청을 허용하는 위험이 있음
+
+# 올바른 설정
+import os
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,  # 명시적 허용 목록
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+```
+
+프로덕션에서 nginx로 same-origin 배포를 하면 CORS 미들웨어 자체가 불필요해진다.
+
+## CSRF — 사이트 간 요청 위조
+
+CSRF는 사용자가 로그인된 상태에서 악성 사이트가 그 세션을 이용해 요청을 보내는 공격이다.
+
+**JWT(Authorization 헤더 방식)를 쓰면 CSRF 위험이 낮다.** 쿠키 기반 세션과 달리 브라우저가 자동으로 Authorization 헤더를 전송하지 않기 때문이다. 쿠키에 JWT를 저장한다면 반드시 `SameSite=Strict` 또는 `SameSite=Lax`를 설정한다.
+
+```python
+from fastapi import Response
+
+def set_auth_cookie(response: Response, token: str):
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,      # JS에서 접근 불가 (XSS 방어)
+        secure=True,        # HTTPS에서만 전송
+        samesite="lax",     # CSRF 방어
+        max_age=3600,
+    )
+```
+
+## SQL Injection
+
+SQL Injection은 사용자 입력이 SQL 쿼리에 그대로 삽입되어 DB를 조작하는 공격이다.
+
+```python
+# 위험한 코드 — 절대 사용 금지
+async def get_user_bad(username: str, db: AsyncSession):
+    query = f"SELECT * FROM users WHERE username = '{username}'"
+    # username = "admin' OR '1'='1" 입력 시 모든 사용자 반환!
+    result = await db.execute(text(query))
+
+# 안전한 코드 — SQLAlchemy ORM 또는 파라미터 바인딩
+async def get_user_safe(username: str, db: AsyncSession):
+    result = await db.execute(
+        select(User).where(User.username == username)  # ORM이 자동 이스케이프
+    )
+    return result.scalar_one_or_none()
+
+# raw SQL이 필요하면 바인딩 파라미터 사용
+async def get_user_raw(username: str, db: AsyncSession):
+    result = await db.execute(
+        text("SELECT * FROM users WHERE username = :username"),
+        {"username": username}  # 파라미터 바인딩
+    )
+```
+
+SQLAlchemy ORM을 쓰면 기본적으로 SQL Injection에서 안전하다. `text()` 함수에 f-string을 사용하는 것만 피하면 된다.
+
+## XSS — 크로스 사이트 스크립팅
+
+XSS는 악성 스크립트가 페이지에 삽입되어 사용자 데이터를 탈취하는 공격이다. React는 기본적으로 JSX 렌더링 시 HTML을 이스케이프한다.
+
+```tsx
+// React는 이걸 안전하게 처리함 (텍스트로 출력)
+const userInput = "<script>alert('xss')</script>"
+return <div>{userInput}</div>  // 안전
+
+// 위험한 패턴 — dangerouslySetInnerHTML
+return <div dangerouslySetInnerHTML={{ __html: userInput }} />  // XSS 취약!
+```
+
+백엔드에서 HTML을 반환해야 한다면 `bleach` 같은 라이브러리로 sanitize한다.
+
+## 비밀번호 해싱
+
+비밀번호는 평문으로 절대 저장하지 않는다. bcrypt를 사용한다.
+
+```python
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(plain: str) -> str:
+    return pwd_context.hash(plain)
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+# 사용 예
+hashed = hash_password("mypassword123")
+assert verify_password("mypassword123", hashed)   # True
+assert not verify_password("wrong", hashed)       # False
+```
+
+bcrypt는 의도적으로 느리게 설계되어 무차별 대입 공격에 강하다. MD5, SHA-1로 비밀번호를 해싱하는 것은 현재 기준으로 심각한 취약점이다.
+
+## Rate Limiting — 무차별 대입 방어
+
+로그인 엔드포인트에 rate limiting이 없으면 공격자가 비밀번호를 무한정 시도할 수 있다.
+
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.post("/api/auth/login")
+@limiter.limit("5/minute")  # IP당 분당 5회
+async def login(request: Request, credentials: LoginCredentials, db: AsyncSession = Depends(get_db)):
+    user = await authenticate_user(credentials.username, credentials.password, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"access_token": create_jwt(user.id)}
+```
+
+ML 추론 엔드포인트도 rate limiting을 적용한다. GPU 자원을 무한정 소모하는 DoS 공격을 막기 위해서다.
+
+## 보안 체크리스트
+
+| 항목 | 위험도 | 확인 |
+|------|--------|------|
+| CORS allow_origins에 와일드카드(`*`) + credentials 조합 금지 | Critical | ☐ |
+| 비밀번호 bcrypt 해싱 (MD5/SHA1 금지) | Critical | ☐ |
+| SQL 쿼리에 f-string 사용 금지 | Critical | ☐ |
+| JWT secret key 환경변수 관리 (코드에 하드코딩 금지) | Critical | ☐ |
+| 로그인 엔드포인트 rate limiting | High | ☐ |
+| 쿠키에 HttpOnly + SameSite 설정 | High | ☐ |
+| `dangerouslySetInnerHTML` 사용 금지 (불가피하면 sanitize) | High | ☐ |
+| HTTPS 강제 (프로덕션) | High | ☐ |
+| 에러 메시지에 내부 정보 노출 금지 | Medium | ☐ |
+| 민감한 필드 응답에서 제외 (password hash 등) | Medium | ☐ |
+| 의존성 패키지 정기 업데이트 | Medium | ☐ |
+
+## 핵심 정리
+
+- **CORS** — allow_origins를 명시적으로 지정하고, same-origin 배포로 아예 없애는 것이 최선이다.
+- **SQL Injection** — SQLAlchemy ORM을 쓰거나 파라미터 바인딩을 사용하면 기본적으로 안전하다.
+- **비밀번호** — bcrypt로 해싱. 평문 저장과 MD5/SHA1은 현재 기준으로 심각한 취약점이다.
+- **Rate limiting** — 로그인과 ML 추론 엔드포인트에는 반드시 적용한다.
+- 보안은 체크리스트로 관리한다. 기억에 의존하면 놓친다.

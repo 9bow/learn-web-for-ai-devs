@@ -1,0 +1,251 @@
+---
+title: 마이그레이션, 트랜잭션, 인덱스
+description: Alembic으로 스키마 변경을 관리하고, 트랜잭션으로 데이터 일관성을 보장하며, 인덱스와 EXPLAIN으로 쿼리를 최적화한다
+sidebar:
+  order: 3
+learning_objectives:
+  - "Alembic으로 마이그레이션 파일을 생성하고 적용한다"
+  - "트랜잭션의 ACID 속성과 롤백을 이해한다"
+  - "인덱스 생성 시점과 EXPLAIN QUERY PLAN 사용법을 안다"
+prerequisites:
+  - "SQLAlchemy ORM 기초 (08-02)"
+  - "SQL 기초"
+estimated_minutes: 20
+references:
+  - title: "Alembic 공식 문서"
+    url: "https://alembic.sqlalchemy.org/en/latest/"
+    accessed: "2026-04-14"
+  - title: "SQLite EXPLAIN QUERY PLAN"
+    url: "https://www.sqlite.org/eqp.html"
+    accessed: "2026-04-14"
+---
+
+`Base.metadata.create_all()` 은 개발 초기에 편리하지만, 프로덕션에서는 쓸 수 없다. 이미 데이터가 있는 테이블을 바꾸거나, 변경 이력을 관리하려면 마이그레이션 도구가 필요하다.
+
+## Alembic 기초
+
+Alembic은 SQLAlchemy의 공식 마이그레이션 도구다. Git처럼 스키마 변경 이력을 관리한다.
+
+```bash
+pip install alembic
+
+# 프로젝트 초기화 (alembic/ 디렉터리 생성)
+alembic init alembic
+```
+
+```text
+프로젝트 구조:
+├── alembic/
+│   ├── env.py          ← DB URL, 모델 설정
+│   ├── versions/       ← 마이그레이션 파일들
+│   └── script.py.mako  ← 파일 템플릿
+├── alembic.ini         ← Alembic 설정
+└── models.py
+```
+
+`alembic/env.py` 에 모델과 DB URL을 연결한다.
+
+```python
+# alembic/env.py (핵심 부분만)
+from database import engine, Base
+from models import User, Experiment  # 모든 모델 임포트 필수
+
+target_metadata = Base.metadata
+
+# run_migrations_online 함수 내부
+with engine.connect() as connection:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+```
+
+### 마이그레이션 파일 생성
+
+```bash
+# 현재 모델과 DB 상태를 비교해 자동으로 마이그레이션 생성
+alembic revision --autogenerate -m "create users and experiments tables"
+```
+
+생성된 파일을 확인한다.
+
+```python
+# alembic/versions/a1b2c3d4_create_users_and_experiments_tables.py
+
+def upgrade() -> None:
+    op.create_table(
+        "users",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("email", sa.String(), nullable=False),
+        sa.Column("hashed_password", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
+    # ... experiments 테이블도 생성
+
+
+def downgrade() -> None:
+    op.drop_table("experiments")
+    op.drop_table("users")
+```
+
+### 마이그레이션 적용
+
+```bash
+# 최신 버전으로 업그레이드
+alembic upgrade head
+
+# 이전 버전으로 롤백
+alembic downgrade -1
+
+# 현재 버전 확인
+alembic current
+
+# 전체 이력 보기
+alembic history --verbose
+```
+
+### 컬럼 추가 예시
+
+```python
+# models.py에 컬럼 추가
+class Experiment(Base):
+    # ... 기존 필드
+    tags = Column(String, default="")  # 새로 추가
+```
+
+```bash
+alembic revision --autogenerate -m "add tags to experiments"
+alembic upgrade head
+```
+
+## 트랜잭션
+
+트랜잭션은 "모두 성공하거나 모두 실패하는" 작업 단위다. ACID 속성을 보장한다.
+
+| 속성 | 의미 |
+|------|------|
+| **Atomicity** | 부분 실패 없음 — 전체 성공 또는 전체 롤백 |
+| **Consistency** | 트랜잭션 전후 DB 제약 조건 유지 |
+| **Isolation** | 동시 트랜잭션이 서로 간섭하지 않음 |
+| **Durability** | commit 후 데이터는 영구 보존 |
+
+```python
+from sqlalchemy.orm import Session
+from models import User, Experiment
+
+
+def create_user_with_first_experiment(
+    db: Session,
+    email: str,
+    password: str,
+    experiment_name: str,
+) -> User:
+    """
+    유저 생성과 첫 실험 생성이 원자적으로 처리된다.
+    어느 한쪽이 실패하면 둘 다 롤백된다.
+    """
+    try:
+        user = User(email=email, hashed_password=hash_password(password))
+        db.add(user)
+        db.flush()  # user.id 생성 (commit 아님)
+
+        experiment = Experiment(
+            name=experiment_name,
+            owner_id=user.id,
+        )
+        db.add(experiment)
+        db.flush()
+
+        db.commit()
+        return user
+
+    except Exception:
+        db.rollback()
+        raise
+```
+
+FastAPI의 `get_db` dependency가 commit/rollback을 자동 처리하므로, 일반적으로는 직접 `db.commit()` 을 호출하지 않는다. 명시적 트랜잭션 제어가 필요할 때만 위처럼 작성한다.
+
+```python
+# Savepoint를 이용한 중첩 트랜잭션 (SQLAlchemy 2.0+)
+with db.begin_nested():  # SAVEPOINT
+    db.add(some_object)
+    # 이 블록 내 예외 시 savepoint까지만 롤백
+```
+
+## 인덱스
+
+인덱스는 특정 컬럼 조회 속도를 높이는 자료구조다. 읽기는 빨라지지만 쓰기가 약간 느려지고 디스크 공간을 더 사용한다.
+
+### 인덱스를 추가해야 하는 컬럼
+
+```text
+- WHERE 조건에 자주 등장하는 컬럼
+- JOIN에 사용되는 외래 키
+- ORDER BY에 사용되는 컬럼
+- UNIQUE 제약이 있는 컬럼 (자동 생성)
+```
+
+```python
+# SQLAlchemy 모델에서 인덱스 정의
+class Experiment(Base):
+    __tablename__ = "experiments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)  # 자주 조회
+    accuracy = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # 복합 인덱스: 여러 컬럼을 함께 조회할 때
+    __table_args__ = (
+        Index("ix_exp_owner_created", "owner_id", "created_at"),
+    )
+```
+
+```sql
+-- SQL로 직접 생성 (Alembic migration 안에서)
+CREATE INDEX ix_experiments_owner_id ON experiments(owner_id);
+CREATE INDEX ix_experiments_accuracy ON experiments(accuracy DESC);
+```
+
+### EXPLAIN QUERY PLAN
+
+인덱스가 실제로 사용되는지 확인한다.
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("app.db")
+
+# 실행 계획 확인
+plan = conn.execute("""
+    EXPLAIN QUERY PLAN
+    SELECT * FROM experiments
+    WHERE owner_id = 1
+    ORDER BY created_at DESC
+    LIMIT 20
+""").fetchall()
+
+for row in plan:
+    print(row)
+```
+
+```text
+# 인덱스 미사용 시 (SCAN = 전체 스캔, 느림):
+(2, 0, 0, 'SCAN experiments')
+
+# 인덱스 사용 시 (SEARCH = 인덱스 검색, 빠름):
+(2, 0, 0, 'SEARCH experiments USING INDEX ix_experiments_owner_id (owner_id=?)')
+```
+
+`SCAN` 이 나오면 인덱스 추가를 고려한다. 데이터가 적을 때는 차이가 없지만, 수십만 건이 넘으면 체감된다.
+
+## 핵심 정리
+
+- **Alembic은 스키마 변경 이력을 Git처럼 관리한다** — `--autogenerate` 로 모델과 DB 차이를 자동 감지한다
+- **`upgrade head` / `downgrade -1` 로 마이그레이션을 적용하고 롤백한다** — 프로덕션에서 `create_all` 대신 반드시 사용한다
+- **트랜잭션은 원자성을 보장한다** — 중간에 실패하면 `rollback()` 으로 이전 상태로 돌아간다
+- **자주 조회하는 컬럼에 인덱스를 추가한다** — 외래 키, WHERE 조건, ORDER BY 컬럼이 주요 대상이다
+- **EXPLAIN QUERY PLAN으로 인덱스 사용 여부를 확인한다** — `SCAN` 이 나오면 인덱스를 검토한다

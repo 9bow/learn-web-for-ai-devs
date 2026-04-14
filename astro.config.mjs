@@ -6,8 +6,8 @@ import tailwindcss from '@tailwindcss/vite';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://example.github.io',
-  base: '/web-for-ai-devs',
+  site: 'https://9bow.github.io',
+  base: '/learn-web-for-ai-devs',
   integrations: [
     starlight({
       title: 'Web for AI Devs',

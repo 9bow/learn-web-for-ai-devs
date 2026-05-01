@@ -10,6 +10,16 @@ export default defineConfig({
   base: '/learn-web-for-ai-devs',
   integrations: [
     starlight({
+      head: [
+        {
+          tag: 'script',
+          attrs: { async: true, src: 'https://www.googletagmanager.com/gtag/js?id=G-QW1W5VBVNF' },
+        },
+        {
+          tag: 'script',
+          content: `window.dataLayer = window.dataLayer || [];\nfunction gtag(){dataLayer.push(arguments);}\ngtag('js', new Date());\ngtag('config', 'G-QW1W5VBVNF');`,
+        },
+      ],
       title: 'Web for AI Devs',
       description: 'AI 모델 개발자를 위한 Web/HTTP 완전 정복',
       defaultLocale: 'root',

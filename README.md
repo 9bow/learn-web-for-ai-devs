@@ -1,33 +1,50 @@
 # Web for AI Devs
 
-AI 모델 개발자를 위한 Web/HTTP 완전 정복. HTTP 기초부터 React + FastAPI + SQLite 풀스택 실습까지.
+AI 모델 개발자를 위한 Web/HTTP 완전 정복 학습 사이트입니다. 모델을 만드는 데 익숙하지만 서비스화, 프론트엔드, 백엔드, DB, 배포 구조가 낯선 개발자가 HTTP 기초부터 React + FastAPI + SQLite 풀스택 실습까지 이어서 학습할 수 있도록 구성했습니다.
 
-Astro 6 + Starlight 기반 한국어 학습 사이트.
+## 대상
+
+- `/predict` 엔드포인트는 만들어 봤지만 웹 서비스 전체 구조가 낯선 AI/ML 개발자
+- nginx, CORS, 세션, JWT, SSE, WebSocket, SSR/CSR 같은 용어를 실무 맥락에서 정리하려는 개발자
+- Claude Code와 함께 작은 풀스택 프로토타입을 만들어 보려는 학습자
+
+## 구성
+
+- 10개 섹션
+- 48개 MDX 챕터
+- 10개 섹션별 퀴즈
+- Astro 6 + Starlight + React 기반
+
+## 커리큘럼
+
+1. 웹의 본질: HTTP와 클라이언트-서버
+2. 서버 아키텍처: Web / WAS / DB
+3. 고급 HTTP와 실시간 통신: WebSocket, SSE, Long Polling, gRPC
+4. 확장성: 로드밸런서와 스케일링
+5. 프론트엔드의 진화: HTML에서 SPA로
+6. React 생태계와 Next.js의 필요성
+7. 백엔드 API: FastAPI와 Python 생태계
+8. 데이터 계층: SQLite와 ORM
+9. 실습: Claude Code로 React + FastAPI + SQLite 앱 만들기
+10. Best Practice와 리뷰 체크리스트
 
 ## 로컬 개발
 
 ```bash
 pnpm install
-pnpm dev      # 로컬 개발 서버 (http://localhost:4321)
-pnpm build    # 프로덕션 빌드
-pnpm preview  # 빌드 결과 미리보기
+pnpm dev
+pnpm build
+pnpm preview
 ```
 
-## 배포
+## 주요 경로
 
-`main` 브랜치에 push하면 GitHub Actions가 GitHub Pages에 자동 배포합니다.
-`astro.config.mjs`의 `site`, `base`를 본인 계정/저장소에 맞춰 수정하세요.
+- 문서 본문: `src/content/docs/`
+- 퀴즈 데이터: `public/data/quiz/`
+- 공통 학습 컴포넌트: `src/components/learning/`
+- 스타일: `src/styles/`
+- 사이트 설정: `astro.config.mjs`
 
-## 커리큘럼
+## 배포 메모
 
-9개 섹션, 42개 챕터, 총 학습시간 약 18~22시간.
-
-1. 웹의 본질: HTTP와 클라이언트-서버
-2. 서버 아키텍처: Web / WAS / DB
-3. 확장성: 로드밸런서와 스케일링
-4. 프론트엔드의 진화: HTML에서 SPA로
-5. React 생태계와 Next.js의 필요성
-6. 백엔드 API: FastAPI와 Python 생태계
-7. 데이터 계층: SQLite와 ORM
-8. 실습: Claude Code로 풀스택 앱 만들기
-9. Best Practice와 리뷰 체크리스트
+`astro.config.mjs`의 `site`와 `base`는 GitHub Pages 배포 경로에 맞춰 설정되어 있습니다. 배포 대상 저장소나 계정이 바뀌면 해당 값을 먼저 확인하세요.

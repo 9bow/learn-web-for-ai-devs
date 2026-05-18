@@ -16,6 +16,9 @@ references:
   - title: "OpenAI API — Streaming"
     url: "https://platform.openai.com/docs/api-reference/streaming"
     accessed: "2026-04-14"
+  - title: "OpenAI API — Migrate to the Responses API"
+    url: "https://developers.openai.com/api/docs/guides/migrate-to-responses"
+    accessed: "2026-05-16"
   - title: "Anthropic API — Streaming Messages"
     url: "https://docs.anthropic.com/en/api/messages-streaming"
     accessed: "2026-04-14"
@@ -27,6 +30,8 @@ references:
 LLM API를 사용하는 서비스를 만든다면 스트리밍 응답은 선택이 아닌 필수다. 사용자가 수십 초를 기다리지 않으려면 토큰이 생성되는 즉시 화면에 표시해야 한다. 이 챕터에서는 주요 API의 스트림 포맷을 분석하고, 직접 모델을 서빙할 때의 구현 패턴을 다룬다.
 
 ## OpenAI 스트리밍 포맷 분석
+
+OpenAI의 신규 구현은 Responses API를 우선 고려하는 것이 좋다. Responses API는 텍스트 생성뿐 아니라 도구 호출, web search, file search, code interpreter, remote MCP 같은 agentic primitive를 한 요청 안에서 다루도록 설계되어 있다. 다만 기존 Chat Completions API도 계속 지원되므로, 아래의 `data: {...}` / `[DONE]` 예시는 레거시 호환 포맷을 이해하기 위한 기준으로 보면 된다.
 
 `stream: true`를 설정하면 OpenAI는 SSE 스트림으로 응답한다.
 
@@ -233,7 +238,7 @@ FastAPI generator에서 GeneratorExit 발생
 3. 서버 측 최대 버퍼 크기 제한
 ```
 
-FastAPI의 `StreamingResponse`는 클라이언트가 연결을 끊으면 generator가 자동으로 종료되므로, 별도로 연결 상태를 확인할 필요가 없다.
+FastAPI의 `StreamingResponse`는 async generator를 스트림으로 내보내는 기본 도구다. 단, 오래 걸리는 모델 생성이나 별도 스레드 작업을 붙일 때는 연결 해제를 "항상 자동으로 즉시 중단된다"고 가정하지 말고, `await asyncio.sleep(0)`처럼 취소 지점을 두거나 `Request.is_disconnected()`로 클라이언트 연결 상태를 확인하는 패턴을 함께 고려한다.
 
 ## 토큰 수준 오류 처리
 
@@ -252,7 +257,8 @@ async def generate_tokens_safe(prompt: str):
 
 ## 핵심 정리
 
-- OpenAI는 `data: {...}` + `data: [DONE]`, Anthropic은 `event:` 타입으로 단계를 구분한다
+- OpenAI의 새 프로젝트는 Responses API를 우선 검토하고, Chat Completions 호환 스트림에서는 `data: {...}` + `data: [DONE]` 패턴을 이해한다
+- Anthropic은 `event:` 타입으로 메시지 시작, 델타, 종료 단계를 구분한다
 - HuggingFace `TextIteratorStreamer`와 별도 스레드로 동기 모델 추론을 비동기 스트림으로 변환한다
 - 브라우저에서 POST + 스트림은 `fetch` API로 `response.body.getReader()`를 사용한다
 - `AbortController`로 사용자가 생성을 취소하면 서버 generator도 연쇄적으로 종료된다

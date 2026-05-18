@@ -38,6 +38,9 @@ export default defineConfig({
         { label: '09. 실습: Claude Code로 풀스택 앱 만들기', autogenerate: { directory: '09-hands-on-fullstack' } },
         { label: '10. Best Practice와 리뷰 체크리스트', autogenerate: { directory: '10-best-practices' } },
       ],
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/9bow/learn-web-for-ai-devs' },
+      ],
       customCss: ['./src/styles/global.css', './src/styles/custom.css'],
     }),
     react(),

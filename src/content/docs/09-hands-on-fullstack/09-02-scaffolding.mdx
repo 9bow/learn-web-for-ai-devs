@@ -182,6 +182,50 @@ git add .gitignore .env.example backend/requirements.txt frontend/package.json f
 git commit -m "chore: project scaffolding — backend(FastAPI) + frontend(React+Vite)"
 ```
 
+## Claude Code로 스캐폴딩 자동화
+
+반복되는 디렉터리 생성과 보일러플레이트 작성은 Claude Code에 맡길 수 있다.
+
+```text
+"FastAPI + React(Vite) 모노레포를 만들어줘.
+- backend/ : fastapi, uvicorn, sqlalchemy, pydantic 설치
+- frontend/ : pnpm create vite --template react-ts
+- 루트에 .env.example, .gitignore 포함
+- 기존 파일 수정하지 말 것"
+```
+
+Claude Code가 터미널 명령을 실행하고 파일을 생성한다. 완료 후 아래 점검 항목으로 결과를 검증한다.
+
+**프롬프트 팁:**
+
+| 원칙 | 예시 |
+|------|------|
+| 범위 명시 | "backend/ 디렉터리만 생성할 것" |
+| 제약 명시 | "기존 파일 덮어쓰지 말 것" |
+| 검증 포함 | "생성 후 uvicorn app.main:app --reload 로 확인" |
+
+## 개발 흐름 요약
+
+스캐폴딩 이후 개발 사이클은 다음과 같다.
+
+```text
+1. 기능 요구사항 정의 (유저 스토리)
+       │
+       ▼
+2. API 엔드포인트 스펙 작성
+       │
+       ▼
+3. 백엔드 구현 → uvicorn으로 검증 (/docs)
+       │
+       ▼
+4. 프론트엔드 연동 → Vite Dev Server에서 확인
+       │
+       ▼
+5. nginx 통합 → 단일 포트로 최종 확인
+```
+
+각 단계를 독립적으로 검증하면 문제 발생 시 어느 레이어인지 빠르게 파악할 수 있다.
+
 ## 현재 상태 점검
 
 이 시점에서 두 프로세스를 동시에 띄울 수 있어야 한다.
@@ -203,5 +247,13 @@ cd frontend && pnpm dev
 | 헬스 체크 (프록시 경유) | `http://localhost:5173/api/health` |
 
 프록시가 올바르게 설정됐다면 `localhost:5173/api/health` 에서도 `{"status":"ok"}` 가 반환된다.
+
+## 핵심 정리
+
+- **백엔드와 프론트엔드는 독립 환경** — Python venv와 Node 환경을 분리 관리한다
+- **Vite 프록시로 개발 중 CORS 우회** — `vite.config.ts`의 `server.proxy`가 `/api` 요청을 FastAPI로 포워딩한다
+- **`.env.example`로 환경 변수 문서화** — 실제 `.env`는 절대 커밋하지 않는다
+- **헬스 체크 엔드포인트 먼저** — `/api/health`로 배선이 올바른지 가장 먼저 확인한다
+- **단계별 검증** — 백엔드 → 프론트엔드 → nginx 순으로 각 레이어를 독립 검증한다
 
 다음 챕터에서 백엔드 전체 로직을 구현한다.

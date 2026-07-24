@@ -10,23 +10,25 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/react": "^5.0.3",
-    "@astrojs/starlight": "^0.38.3",
+    "@astrojs/react": "^5.0.7",
+    "@astrojs/starlight": "^0.38.5",
     "@tailwindcss/vite": "^4.2.2",
-    "astro": "^6.0.1",
+    "astro": "^6.4.8",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "tailwindcss": "^4.2.2"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3"
   },
   "pnpm": {
     "overrides": {
       "picomatch": ">=4.0.4",
-      "smol-toml": ">=1.6.1"
+      "smol-toml": ">=1.6.1",
+      "sharp": "^0.35.3"
     }
   }
 }

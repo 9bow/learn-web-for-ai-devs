@@ -1,155 +1,102 @@
 ---
-title: FastAPI + nginx 실전 구성 (Uvicorn, Gunicorn, 워커)
-description: Uvicorn, Gunicorn, nginx를 조합해 프로덕션 수준의 FastAPI 배포 아키텍처를 구성한다
+title: FastAPI + nginx 실전 배포
+description: 최신 FastAPI CLI와 Uvicorn 워커, nginx, systemd 또는 컨테이너 오케스트레이터를 조합해 프로덕션 배포 구조를 설계한다.
 sidebar:
   order: 4
 learning_objectives:
-  - "Uvicorn(개발)과 Gunicorn+Uvicorn 워커(프로덕션)의 차이를 설명한다"
-  - "nginx를 리버스 프록시로 구성해 SSL 종료와 요청 버퍼링을 처리한다"
-  - "systemd로 Gunicorn 프로세스를 관리한다"
+  - "단일 서버와 컨테이너 환경에서 FastAPI 프로세스 복제 전략이 다른 이유를 설명한다"
+  - "nginx를 TLS 종료와 리버스 프록시로 구성하고 스트리밍 버퍼링을 제어한다"
+  - "프록시 헤더 신뢰 범위와 워커 수를 환경에 맞게 결정한다"
 prerequisites:
-  - "FastAPI 기본 이해 (07-02)"
-  - "Linux 기본 명령어"
+  - "07-02-fastapi-overview"
+  - "02-05-nginx-practical-config"
 estimated_minutes: 30
 references:
-  - title: "Uvicorn Deployment"
+  - title: "FastAPI — Server Workers"
+    url: "https://fastapi.tiangolo.com/deployment/server-workers/"
+    accessed: "2026-07-24"
+  - title: "FastAPI — FastAPI in Containers"
+    url: "https://fastapi.tiangolo.com/deployment/docker/"
+    accessed: "2026-07-24"
+  - title: "Uvicorn — Deployment"
     url: "https://www.uvicorn.org/deployment/"
-    accessed: "2026-04-14"
-  - title: "Gunicorn 공식 문서"
-    url: "https://docs.gunicorn.org/en/stable/"
-    accessed: "2026-04-14"
-  - title: "nginx 공식 문서"
-    url: "https://nginx.org/en/docs/"
-    accessed: "2026-04-14"
-  - title: "FastAPI Deployment"
-    url: "https://fastapi.tiangolo.com/deployment/"
-    accessed: "2026-04-14"
+    accessed: "2026-07-24"
+  - title: "nginx — Using nginx as HTTP load balancer"
+    url: "https://nginx.org/en/docs/http/load_balancing.html"
+    accessed: "2026-07-24"
 ---
 
-개발 중에는 `uvicorn main:app --reload` 한 줄로 충분하다. 하지만 이 구성을 그대로 인터넷에 노출하면 안 된다. 프로덕션에는 세 가지 레이어가 필요하다: **nginx** (앞단), **Gunicorn** (프로세스 관리), **Uvicorn 워커** (ASGI 실행).
+개발 중에는 `fastapi dev`가 자동 재로딩과 상세 로그를 제공한다. 프로덕션에서는 재로딩을 끄고, 프로세스 재시작·TLS·로그·타임아웃·복제 전략을 별도로 설계해야 한다. 그렇다고 Gunicorn이 항상 필수인 것은 아니다. 현재 FastAPI 공식 문서는 `fastapi run --workers`와 `uvicorn --workers`를 직접적인 다중 프로세스 실행 방법으로 안내한다.
 
-## 전체 아키텍처
+## 먼저 배포 단위를 결정한다
 
 ```text
-Internet
-   │  HTTPS (443)
-   ▼
-┌──────────────────────────────────┐
-│  nginx                           │
-│  - SSL/TLS 종료                  │
-│  - 정적 파일 서빙                 │
-│  - 요청 버퍼링 / 타임아웃         │
-│  - client_max_body_size 제한     │
-│  - 접근 로그                     │
-└──────────────┬───────────────────┘
-               │  Unix socket (빠름) 또는 TCP 127.0.0.1:8000
-               ▼
-┌──────────────────────────────────┐
-│  Gunicorn (master process)       │
-│  - 워커 프로세스 생성/모니터링    │
-│  - 워커 재시작 / graceful reload │
-│  - 신호(SIGHUP, SIGTERM) 처리   │
-└──┬──────┬──────┬──────┬──────────┘
-   │      │      │      │
-   ▼      ▼      ▼      ▼
- Uvicorn Uvicorn Uvicorn Uvicorn
- worker  worker  worker  worker
-   │      │      │      │
-   └──────┴──────┴──────┘
-         FastAPI 앱 코드
+┌──────────────────── 단일 VM / 베어메탈 ────────────────────┐
+│ nginx ─▶ Uvicorn 부모 프로세스 ─┬─ worker 1              │
+│                                 ├─ worker 2              │
+│                                 └─ worker N              │
+└────────────────────────────────────────────────────────────┘
+
+┌──────────────────── 컨테이너 오케스트레이터 ────────────────┐
+│ Load Balancer ─┬─ Pod A: Uvicorn 1 process               │
+│                ├─ Pod B: Uvicorn 1 process               │
+│                └─ Pod C: Uvicorn 1 process               │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## Uvicorn만 쓰면 안 되는 이유
+단일 VM에서는 한 부모 프로세스가 여러 워커를 관리하는 구성이 단순하다. Kubernetes 같은 오케스트레이터에서는 컨테이너 자체가 복제·재시작 단위이므로 보통 컨테이너당 Uvicorn 프로세스 하나를 두고 Pod 수를 늘린다. 컨테이너 안과 오케스트레이터 양쪽에서 동시에 복제하면 용량 계산, 종료 신호, 헬스 체크가 불필요하게 복잡해진다.
 
-Uvicorn은 단일 프로세스 ASGI 서버다. 직접 인터넷에 노출했을 때의 문제:
+## 단일 서버: FastAPI CLI 또는 Uvicorn
 
-| 문제 | 설명 |
-|------|------|
-| Slow client 공격 | 느린 클라이언트가 연결을 오래 점유해 DoS 유발 |
-| SSL/TLS 없음 | Uvicorn은 SSL 설정이 번거롭고 성능도 떨어짐 |
-| 단일 CPU 활용 | GIL 때문에 멀티코어를 완전히 활용 못함 |
-| 워커 재시작 없음 | 메모리 누수 시 자동 복구 불가 |
-| 접근 로그 관리 | nginx의 로그 포맷/로테이션이 훨씬 강력 |
-
-## Gunicorn + Uvicorn 워커 설정
+`fastapi[standard]`를 설치했다면 다음과 같이 실행할 수 있다.
 
 ```bash
-pip install gunicorn uvicorn[standard]
+fastapi run --workers 4 main.py
 ```
 
-기본 실행 명령:
+Uvicorn을 직접 실행하는 방법도 같다.
 
 ```bash
-gunicorn main:app \
+uvicorn main:app \
+  --host 127.0.0.1 \
+  --port 8000 \
   --workers 4 \
-  --worker-class uvicorn.workers.UvicornWorker \
-  --bind unix:/tmp/gunicorn.sock \
-  --timeout 120 \
-  --keepalive 5 \
-  --max-requests 1000 \
-  --max-requests-jitter 50 \
-  --access-logfile - \
-  --error-logfile -
+  --proxy-headers \
+  --forwarded-allow-ips 127.0.0.1
 ```
 
-설정 파일로 관리하는 것이 더 편리하다.
+여기서 중요한 점은 다음과 같다.
 
-```ini
-# gunicorn.conf.py
-bind = "unix:/tmp/gunicorn.sock"
-workers = 4
-worker_class = "uvicorn.workers.UvicornWorker"
-timeout = 120
-keepalive = 5
-max_requests = 1000
-max_requests_jitter = 50
-accesslog = "-"
-errorlog = "-"
-loglevel = "info"
-```
+| 옵션 | 역할 | 주의점 |
+|---|---|---|
+| `--workers 4` | 별도 프로세스 네 개로 요청 처리 | 앱과 모델 메모리도 워커마다 복제될 수 있다 |
+| `--host 127.0.0.1` | nginx가 같은 호스트에서만 접근 | 외부에 직접 노출하지 않는다 |
+| `--proxy-headers` | `X-Forwarded-*` 헤더 반영 | 신뢰할 프록시를 반드시 제한한다 |
+| `--forwarded-allow-ips` | 프록시 헤더를 믿을 IP 지정 | `*`는 신뢰 경계가 명확할 때만 사용한다 |
 
-```bash
-gunicorn main:app -c gunicorn.conf.py
-```
+`Uvicorn은 개발 전용`이라는 설명은 정확하지 않다. Uvicorn은 프로덕션 ASGI 서버로 사용할 수 있다. 다만 외부에 직접 노출하기보다 nginx나 관리형 로드밸런서 뒤에 두고, systemd·컨테이너 런타임·오케스트레이터 중 하나가 재시작과 수명 주기를 맡게 한다.
 
-### 워커 수 계산
+## 워커 수는 공식으로 정하지 않는다
+
+`CPU 코어 × 2 + 1`은 모든 ASGI 앱에 적용되는 규칙이 아니다. 적절한 워커 수는 요청의 CPU 사용량, 블로킹 I/O, 메모리, 모델 로딩 방식, 목표 지연 시간에 따라 달라진다.
 
 ```text
-일반 웹 서버 (I/O 집약적):
-  워커 수 = CPU 코어 수 × 2 + 1
-
-ML 추론 서버 (CPU 집약적):
-  워커 수 = CPU 코어 수  (또는 코어 수 + 1)
-  이유: 추론 중 CPU를 꽉 잡기 때문에 더 많아봐야 컨텍스트 스위칭만 늘어남
-
-GPU 추론 서버:
-  워커 수 = 1 (GPU는 보통 하나를 여러 워커가 공유하면 충돌 발생)
-  대신 비동기로 요청을 큐잉하거나 별도 inference 서버(Triton 등) 사용
+1. 워커 1개로 부하 테스트
+2. 워커를 2, 4개로 늘리며 처리량과 p95 지연 측정
+3. 메모리 사용량과 CPU 포화 확인
+4. 처리량 증가가 멈추거나 지연이 악화되기 직전 값을 선택
 ```
 
-## Unix Socket vs TCP
+특히 ML 모델을 FastAPI 프로세스 안에 로드하면 워커마다 가중치가 복제될 수 있다. GPU 모델은 여러 웹 워커가 하나의 GPU 메모리를 경쟁하게 만들기보다, FastAPI와 전용 추론 서버를 분리하는 편이 일반적으로 안전하다.
 
-```text
-TCP (127.0.0.1:8000)
-  - 설정 간단
-  - 같은 서버 내에서도 네트워크 스택 거침
-  - 포트 번호로 충돌 가능
+## nginx 리버스 프록시
 
-Unix Socket (/tmp/gunicorn.sock)
-  - 같은 서버의 nginx-Gunicorn 통신에 최적
-  - 네트워크 스택 우회 → 지연 시간 감소
-  - 파일 권한으로 접근 제어
-```
-
-프로덕션에서는 Unix socket을 권장한다.
-
-## nginx 설정
+다음 예시는 TLS를 nginx에서 종료하고 FastAPI에 전달한다. 인증서 발급과 키 권한 관리는 별도 운영 절차로 다뤄야 한다.
 
 ```nginx
-# /etc/nginx/sites-available/myapp
-
 upstream fastapi_app {
-    server unix:/tmp/gunicorn.sock fail_timeout=0;
+    server 127.0.0.1:8000;
+    keepalive 32;
 }
 
 server {
@@ -159,75 +106,73 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;
     server_name api.example.com;
 
-    # SSL 인증서 (Let's Encrypt 예시)
     ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    # 요청 크기 제한 (이미지/오디오 업로드가 있으면 늘림)
-    client_max_body_size 50M;
-
-    # LLM처럼 응답이 오래 걸리는 엔드포인트를 위한 타임아웃
-    proxy_read_timeout  300s;
-    proxy_send_timeout  300s;
-    proxy_connect_timeout 10s;
-
-    # 스트리밍 응답을 위해 버퍼링 비활성화
-    proxy_buffering off;
-    proxy_cache off;
+    client_max_body_size 50m;
 
     location / {
         proxy_pass http://fastapi_app;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 
-    # 정적 파일은 nginx가 직접 서빙
-    location /static/ {
-        alias /var/www/myapp/static/;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
+    location /stream/ {
+        proxy_pass http://fastapi_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_buffering off;
+        proxy_cache off;
+        add_header X-Accel-Buffering no;
+        proxy_read_timeout 300s;
     }
 }
 ```
 
+`proxy_buffering off`는 모든 응답에 무조건 적용할 설정이 아니다. 일반 JSON 응답은 버퍼링이 처리량에 유리할 수 있으므로 SSE나 토큰 스트리밍 경로에만 끄는 편이 낫다. 스트림 중간에는 이미 HTTP 상태와 헤더가 전송되었으므로, 오류를 SSE 이벤트나 애플리케이션 프로토콜로 전달해야 한다.
+
+설정 반영 전에는 반드시 문법을 검사한다.
+
 ```bash
-# 설정 활성화 및 적용
-sudo ln -s /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/
-sudo nginx -t          # 설정 문법 검사
+sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## systemd로 Gunicorn 관리
+## systemd로 수명 주기 관리
 
-서버 재부팅 시 자동 시작, 크래시 시 재시작을 설정한다.
+단일 VM에서는 systemd가 부팅 시 시작과 실패 후 재시작을 담당할 수 있다.
 
 ```ini
-# /etc/systemd/system/myapp.service
-
 [Unit]
-Description=FastAPI app via Gunicorn + Uvicorn
+Description=FastAPI application
 After=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/myapp
-Environment="PATH=/var/www/myapp/venv/bin"
-ExecStart=/var/www/myapp/venv/bin/gunicorn main:app -c gunicorn.conf.py
-ExecReload=/bin/kill -s HUP $MAINPID
-KillMode=mixed
-TimeoutStopSec=5
-PrivateTmp=true
+Environment="PATH=/var/www/myapp/.venv/bin"
+ExecStart=/var/www/myapp/.venv/bin/fastapi run --workers 4 main.py
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target
@@ -235,30 +180,47 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable myapp
-sudo systemctl start myapp
+sudo systemctl enable --now myapp
 sudo systemctl status myapp
-
-# 코드 배포 후 무중단 재시작
-sudo systemctl reload myapp
 ```
 
-## FastAPI에서 X-Forwarded-For 신뢰하기
+애플리케이션이 종료 신호를 받으면 새 요청 수락을 멈추고 진행 중인 요청을 마칠 시간이 필요하다. 서비스 관리자, nginx, 오케스트레이터의 종료 유예 시간이 서로 모순되지 않는지 함께 확인한다.
 
-nginx 뒤에 있으면 클라이언트 IP가 프록시 IP로 보인다. `ProxyHeadersMiddleware`로 수정한다.
+## Gunicorn을 쓰는 기존 환경
 
-```python
-from fastapi import FastAPI
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+이미 Gunicorn의 훅, 로깅, 운영 도구에 의존하는 시스템이라면 계속 사용할 수 있다. 다만 Uvicorn 문서에서 `uvicorn.workers` 모듈은 폐기 예정으로 안내되므로 새 구성은 별도 `uvicorn-worker` 패키지의 worker class를 검토한다. 새 프로젝트에서 단지 다중 프로세스만 필요하다면 FastAPI CLI나 Uvicorn의 내장 `--workers`가 더 단순하다.
 
-app = FastAPI()
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="127.0.0.1")
+## 컨테이너와 Kubernetes
+
+컨테이너 이미지에는 실행 파일과 앱만 넣고, TLS와 외부 로드밸런싱은 플랫폼 계층에 맡기는 구성이 일반적이다.
+
+```dockerfile
+FROM python:3.13-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+
+CMD ["fastapi", "run", "main.py", "--port", "8000"]
 ```
+
+Pod 복제 수, readiness/liveness probe, 리소스 요청·제한, 롤링 업데이트 전략은 배포 매니페스트에서 관리한다. 모델을 각 Pod에 로드한다면 시작 시간과 메모리 요구량을 readiness probe와 용량 계획에 반영한다.
+
+## 검증 체크리스트
+
+- [ ] 개발용 `--reload`가 프로덕션 명령에 없는가
+- [ ] 프록시 헤더를 신뢰하는 IP 범위가 실제 프록시로 제한되어 있는가
+- [ ] 일반 응답과 스트리밍 경로의 버퍼링 정책을 분리했는가
+- [ ] 부하 테스트로 워커 수와 메모리 사용량을 측정했는가
+- [ ] 단일 VM에서는 systemd 등 프로세스 관리자가 재시작을 담당하는가
+- [ ] Kubernetes에서는 컨테이너 내부 워커 수와 Pod 복제를 중복 설계하지 않았는가
+- [ ] 종료 유예 시간 안에 진행 중 요청이 안전하게 끝나는가
 
 ## 핵심 정리
 
-- **Uvicorn 단독은 개발 전용** — 프로덕션에는 Gunicorn이 워커를 관리해야 한다
-- **워커 수 = CPU × 2 + 1 (I/O), CPU 수 (GPU 추론)** — ML 워크로드는 더 적게 쓴다
-- **Unix socket이 TCP보다 빠름** — 같은 서버 내 nginx ↔ Gunicorn 통신에 최적이다
-- **nginx가 SSL, 버퍼링, 크기 제한을 담당** — LLM 서빙 시 `proxy_read_timeout`을 반드시 늘린다
-- **systemd로 자동 시작과 재시작 관리** — `systemctl reload`로 무중단 재배포가 가능하다
+- 단일 서버에서는 `fastapi run --workers N` 또는 `uvicorn --workers N`으로 여러 프로세스를 실행할 수 있다.
+- Kubernetes에서는 일반적으로 컨테이너당 단일 Uvicorn 프로세스를 두고 Pod를 복제한다.
+- nginx는 TLS 종료와 리버스 프록시를 담당하며, 스트리밍 경로에만 버퍼링을 끈다.
+- 워커 수는 고정 공식이 아니라 부하 테스트, 메모리, 모델 배치 방식으로 결정한다.
+- Gunicorn은 선택지이지 필수 조건이 아니며, 기존 `uvicorn.workers` 경로의 폐기 예정 상태를 고려해야 한다.

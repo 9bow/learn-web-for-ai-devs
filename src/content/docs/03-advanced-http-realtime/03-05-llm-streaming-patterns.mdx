@@ -82,6 +82,14 @@ data: {"type":"message_stop"}
 
 OpenAI와 달리 `event:` 필드로 이벤트 유형을 구분하고, 각 단계(메시지 시작, 블록 시작, 델타, 블록 종료, 메시지 종료)를 명확하게 분리한다.
 
+두 예제 포맷에서 클라이언트가 구분해야 할 지점은 다음과 같다.
+
+| 구분 | OpenAI Chat Completions 호환 예제 | Anthropic Messages 예제 |
+|---|---|---|
+| 이벤트 구분 | `data:` 안의 JSON 구조 | `event:`와 `data:` 조합 |
+| 텍스트 조각 | `choices[0].delta.content` | `content_block_delta`의 `text_delta` |
+| 종료 신호 | `data: [DONE]` | `message_stop` 이벤트 |
+
 ## FastAPI + HuggingFace 스트리밍 구현
 
 ```python

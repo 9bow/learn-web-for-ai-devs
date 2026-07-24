@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 interface QuizItem {
   id: string;
@@ -10,6 +10,67 @@ interface QuizItem {
 
 interface QuizProps {
   section: string;
+}
+
+function renderInline(text: string, keyOffset: number): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const inlineCodeRegex = /`([^`]+)`/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = inlineCodeRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const plain = text.slice(lastIndex, match.index);
+      parts.push(
+        <span key={`text-${keyOffset}-${parts.length}`}>
+          {plain.split('\n').flatMap((line, index, lines) =>
+            index < lines.length - 1
+              ? [line, <br key={`br-${keyOffset}-${parts.length}-${index}`} />]
+              : [line]
+          )}
+        </span>
+      );
+    }
+    parts.push(<code key={`inline-${keyOffset}-${parts.length}`}>{match[1]}</code>);
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    const plain = text.slice(lastIndex);
+    parts.push(
+      <span key={`text-${keyOffset}-${parts.length}`}>
+        {plain.split('\n').flatMap((line, index, lines) =>
+          index < lines.length - 1
+            ? [line, <br key={`br-${keyOffset}-${parts.length}-${index}`} />]
+            : [line]
+        )}
+      </span>
+    );
+  }
+  return parts;
+}
+
+function renderText(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const codeBlockRegex = /```(?:\w+)?\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(...renderInline(text.slice(lastIndex, match.index), parts.length));
+    }
+    parts.push(
+      <pre key={`code-${parts.length}`}>
+        <code>{match[1]}</code>
+      </pre>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(...renderInline(text.slice(lastIndex), parts.length));
+  }
+  return parts;
 }
 
 export default function Quiz({ section }: QuizProps) {
@@ -59,7 +120,7 @@ export default function Quiz({ section }: QuizProps) {
         return (
           <div key={q.id} style={{ marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--sl-color-gray-6)' }}>
             <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>
-              Q{idx + 1}. {q.question}
+              Q{idx + 1}. {renderText(q.question)}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
               {q.options.map((opt, i) => {
@@ -85,7 +146,7 @@ export default function Quiz({ section }: QuizProps) {
                       cursor: show ? 'default' : 'pointer',
                     }}
                   >
-                    {String.fromCharCode(65 + i)}. {opt}
+                    {String.fromCharCode(65 + i)}. {renderText(opt)}
                   </button>
                 );
               })}
@@ -101,7 +162,7 @@ export default function Quiz({ section }: QuizProps) {
             {show && (
               <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: 'var(--sl-color-gray-6)', borderRadius: '0.25rem', fontSize: '0.9rem' }}>
                 <strong>{picked === q.answer ? '정답입니다.' : `오답. 정답은 ${String.fromCharCode(65 + q.answer)}.`}</strong>
-                {' '}{q.explanation}
+                {' '}{renderText(q.explanation)}
               </div>
             )}
           </div>

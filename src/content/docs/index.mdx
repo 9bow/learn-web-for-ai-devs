@@ -15,7 +15,7 @@ hero:
       variant: secondary
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 ## 이 사이트는 누구를 위한 것인가
 
@@ -26,36 +26,16 @@ LLM 토큰 스트리밍은 WebSocket과 SSE 중 뭘 써야 하는지 헷갈리�
 ## 커리큘럼 개요
 
 <CardGrid>
-  <Card title="01. HTTP와 클라이언트-서버 (60분)" icon="open-book">
-    HTTP 메서드/상태코드, URL, 헤더, 쿠키/세션, CORS, HTTPS — 웹의 공용어 이해.
-  </Card>
-  <Card title="02. Web / WAS / DB (90분)" icon="puzzle">
-    3-Tier 아키텍처, nginx의 역할, 정적/동적 분리, 리버스 프록시.
-  </Card>
-  <Card title="03. 고급 HTTP와 실시간 통신 (90분)" icon="rocket">
-    WebSocket, SSE, Long Polling, gRPC, HTTP/2 — LLM 토큰 스트리밍 패턴 포함.
-  </Card>
-  <Card title="04. 로드밸런서와 스케일링 (75분)" icon="setting">
-    L4/L7 LB, 수평 확장, Stateless 설계, AI 추론 서비스 토폴로지.
-  </Card>
-  <Card title="05. 프론트엔드의 진화 (100분)" icon="laptop">
-    MPA → SPA, JavaScript/TypeScript, CSR vs SSR vs SSG.
-  </Card>
-  <Card title="06. React와 Next.js (100분)" icon="star">
-    React 핵심, 왜 Frontend 서버가 필요한가, Next.js의 역할.
-  </Card>
-  <Card title="07. FastAPI 백엔드 (100분)" icon="rocket">
-    REST 설계, ASGI/Uvicorn/Gunicorn, FastAPI + nginx 구성, 인증/인가.
-  </Card>
-  <Card title="08. SQLite와 ORM (75분)" icon="document">
-    SQLite 쓰임새, SQLAlchemy, 마이그레이션, Postgres 전환 시점.
-  </Card>
-  <Card title="09. 풀스택 실습 (120분)" icon="pencil">
-    Claude Code로 React + FastAPI + SQLite 앱을 직접 만들고 nginx로 통합.
-  </Card>
-  <Card title="10. Best Practice (80분)" icon="approve-check-circle">
-    보안, 성능, 관측성 — 배포 전 체크리스트.
-  </Card>
+  <LinkCard title="01. HTTP와 클라이언트-서버 (60분)" href="/learn-web-for-ai-devs/01-http-foundations/01-01-why-web-for-ai/" description="HTTP 메서드/상태코드, URL, 헤더, 쿠키/세션, CORS, HTTPS — 웹의 공용어 이해." />
+  <LinkCard title="02. Web / WAS / DB (90분)" href="/learn-web-for-ai-devs/02-server-architecture/02-01-three-tier-origins/" description="3-Tier 아키텍처, nginx의 역할, 정적/동적 분리, 리버스 프록시." />
+  <LinkCard title="03. 고급 HTTP와 실시간 통신 (90분)" href="/learn-web-for-ai-devs/03-advanced-http-realtime/03-01-websocket-basics/" description="WebSocket, SSE, Long Polling, gRPC, HTTP/2 — LLM 토큰 스트리밍 패턴 포함." />
+  <LinkCard title="04. 로드밸런서와 스케일링 (75분)" href="/learn-web-for-ai-devs/04-scaling-and-lb/04-01-vertical-vs-horizontal/" description="L4/L7 LB, 수평 확장, Stateless 설계, AI 추론 서비스 토폴로지." />
+  <LinkCard title="05. 프론트엔드의 진화 (100분)" href="/learn-web-for-ai-devs/05-frontend-evolution/05-01-mpa-origins/" description="MPA → SPA, JavaScript/TypeScript, CSR vs SSR vs SSG." />
+  <LinkCard title="06. React와 Next.js (100분)" href="/learn-web-for-ai-devs/06-react-and-nextjs/06-01-react-core/" description="React 핵심, 왜 Frontend 서버가 필요한가, Next.js의 역할." />
+  <LinkCard title="07. FastAPI 백엔드 (100분)" href="/learn-web-for-ai-devs/07-fastapi-backend/07-01-rest-design/" description="REST 설계, ASGI/Uvicorn, FastAPI + nginx 구성, 인증/인가." />
+  <LinkCard title="08. SQLite와 ORM (75분)" href="/learn-web-for-ai-devs/08-sqlite-and-orm/08-01-sqlite-use-cases/" description="SQLite 쓰임새, SQLAlchemy, 마이그레이션, Postgres 전환 시점." />
+  <LinkCard title="09. 풀스택 실습 (120분)" href="/learn-web-for-ai-devs/09-hands-on-fullstack/09-01-app-overview/" description="Claude Code로 React + FastAPI + SQLite 앱을 직접 만들고 nginx로 통합." />
+  <LinkCard title="10. Best Practice (80분)" href="/learn-web-for-ai-devs/10-best-practices/10-01-security/" description="보안, 성능, 관측성 — 배포 전 체크리스트." />
 </CardGrid>
 
 ## 학습 방식

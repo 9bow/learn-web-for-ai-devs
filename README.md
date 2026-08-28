@@ -5,7 +5,7 @@ AI 모델 개발자를 위한 Web/HTTP 완전 정복 학습 사이트입니다. 
 ## 대상
 
 - `/predict` 엔드포인트는 만들어 봤지만 웹 서비스 전체 구조가 낯선 AI/ML 개발자
-- nginx, CORS, 세션, JWT, SSE, WebSocket, SSR/CSR 같은 용어를 실무 맥락에서 정리하려는 개발자
+- nginx, CORS, 세션, JWT, SSE, WebSocket, SSR/CSR 같은 용어와 보안 경계를 실무 맥락에서 정리하려는 개발자
 - Claude Code와 함께 작은 풀스택 프로토타입을 만들어 보려는 학습자
 
 ## 구성
@@ -14,6 +14,7 @@ AI 모델 개발자를 위한 Web/HTTP 완전 정복 학습 사이트입니다. 
 - 47개 학습 챕터 + 홈 문서 1개
 - 10개 섹션별 퀴즈 JSON 데이터
 - Astro 6 + Starlight + React 기반
+- [TERMS.md](TERMS.md)의 용어 기준과 공식 근거 링크
 
 ## 커리큘럼
 
@@ -47,9 +48,9 @@ pnpm build
 
 ## 콘텐츠 품질 기준
 
-- HTTP, 서버, 프론트엔드, DB 개념은 AI 서비스 배포 흐름과 연결해 설명합니다.
+- HTTP, 서버, 프론트엔드, DB 개념은 AI 서비스 배포 흐름과 연결해 설명합니다. HTTP와 인증 관련 설명은 현재 RFC와 공식 문서를 우선합니다.
 - React, FastAPI, SQLite 실습은 작은 프로토타입을 완성하는 데 필요한 최소 구조로 유지합니다.
-- 보안, 성능, 관측성 장은 체크리스트가 실제 코드 리뷰 기준으로 쓰일 수 있도록 작성합니다.
+- 보안, 성능, 관측성 장은 CORS와 인증의 역할을 구분하고, AI 도구 호출·worker·telemetry의 운영 경계까지 확인할 수 있도록 작성합니다.
 
 ## 주요 경로
 
@@ -58,6 +59,7 @@ pnpm build
 - 공통 학습 컴포넌트: `src/components/learning/`
 - 스타일: `src/styles/`
 - 사이트 설정: `astro.config.mjs`
+- 과정별 신규 용어: `TERMS.md`
 
 ## 배포 메모
 

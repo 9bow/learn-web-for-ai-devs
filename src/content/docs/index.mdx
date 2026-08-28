@@ -21,21 +21,21 @@ import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 모델은 만들 줄 알지만 "서비스"가 어색한 AI 개발자. `/predict` 엔드포인트 하나를 띄워본 적은 있어도,
 왜 nginx가 앞단에 있고, 왜 프론트엔드가 별도 서버로 돌아가며, SPA와 Next.js는 언제 쓰는지,
-LLM 토큰 스트리밍은 WebSocket과 SSE 중 뭘 써야 하는지 헷갈리는 분들을 위해 썼습니다.
+LLM 스트리밍에서 SSE·WebSocket·gRPC의 경계, 브라우저 보안과 AI 도구 호출의 권한 경계가 헷갈리는 분들을 위해 썼습니다.
 
 ## 커리큘럼 개요
 
 <CardGrid>
-  <LinkCard title="01. HTTP와 클라이언트-서버 (60분)" href="/learn-web-for-ai-devs/01-http-foundations/01-01-why-web-for-ai/" description="HTTP 메서드/상태코드, URL, 헤더, 쿠키/세션, CORS, HTTPS — 웹의 공용어 이해." />
+  <LinkCard title="01. HTTP와 클라이언트-서버 (60분)" href="/learn-web-for-ai-devs/01-http-foundations/01-01-why-web-for-ai/" description="HTTP 메서드/상태코드, URL, 쿠키·세션·CORS의 보안 경계, HTTPS와 HTTP/2·3." />
   <LinkCard title="02. Web / WAS / DB (90분)" href="/learn-web-for-ai-devs/02-server-architecture/02-01-three-tier-origins/" description="3-Tier 아키텍처, nginx의 역할, 정적/동적 분리, 리버스 프록시." />
-  <LinkCard title="03. 고급 HTTP와 실시간 통신 (90분)" href="/learn-web-for-ai-devs/03-advanced-http-realtime/03-01-websocket-basics/" description="WebSocket, SSE, Long Polling, gRPC, HTTP/2 — LLM 토큰 스트리밍 패턴 포함." />
+  <LinkCard title="03. 고급 HTTP와 실시간 통신 (90분)" href="/learn-web-for-ai-devs/03-advanced-http-realtime/03-01-websocket-basics/" description="WebSocket, SSE, Long Polling, gRPC와 취소·재연결·배압을 포함한 LLM 스트리밍." />
   <LinkCard title="04. 로드밸런서와 스케일링 (75분)" href="/learn-web-for-ai-devs/04-scaling-and-lb/04-01-vertical-vs-horizontal/" description="L4/L7 LB, 수평 확장, Stateless 설계, AI 추론 서비스 토폴로지." />
   <LinkCard title="05. 프론트엔드의 진화 (100분)" href="/learn-web-for-ai-devs/05-frontend-evolution/05-01-mpa-origins/" description="MPA → SPA, JavaScript/TypeScript, CSR vs SSR vs SSG." />
   <LinkCard title="06. React와 Next.js (100분)" href="/learn-web-for-ai-devs/06-react-and-nextjs/06-01-react-core/" description="React 핵심, 왜 Frontend 서버가 필요한가, Next.js의 역할." />
   <LinkCard title="07. FastAPI 백엔드 (100분)" href="/learn-web-for-ai-devs/07-fastapi-backend/07-01-rest-design/" description="REST 설계, ASGI/Uvicorn, FastAPI + nginx 구성, 인증/인가." />
   <LinkCard title="08. SQLite와 ORM (75분)" href="/learn-web-for-ai-devs/08-sqlite-and-orm/08-01-sqlite-use-cases/" description="SQLite 쓰임새, SQLAlchemy, 마이그레이션, Postgres 전환 시점." />
   <LinkCard title="09. 풀스택 실습 (120분)" href="/learn-web-for-ai-devs/09-hands-on-fullstack/09-01-app-overview/" description="Claude Code로 React + FastAPI + SQLite 앱을 직접 만들고 nginx로 통합." />
-  <LinkCard title="10. Best Practice (80분)" href="/learn-web-for-ai-devs/10-best-practices/10-01-security/" description="보안, 성능, 관측성 — 배포 전 체크리스트." />
+  <LinkCard title="10. Best Practice (80분)" href="/learn-web-for-ai-devs/10-best-practices/10-01-security/" description="웹·AI 보안, worker/배치 성능, OpenTelemetry 관측성 — 배포 전 체크리스트." />
 </CardGrid>
 
 ## 학습 방식
@@ -51,3 +51,7 @@ LLM 토큰 스트리밍은 WebSocket과 SSE 중 뭘 써야 하는지 헷갈리�
 3. LLM 토큰 스트리밍 같은 **실시간 통신 패턴**을 선택하고 구현할 수 있다.
 4. 프론트엔드 엔지니어와 **공통 언어**로 대화할 수 있다 (SPA, SSR, CORS, JWT 등).
 5. Claude Code를 활용해 **작은 풀스택 프로토타입을 빠르게** 만들 수 있다.
+
+## 용어
+
+이번 개정에서 추가한 AI·웹 용어와 표기 기준은 [TERMS.md](https://github.com/9bow/learn-web-for-ai-devs/blob/main/TERMS.md)에서 확인합니다.

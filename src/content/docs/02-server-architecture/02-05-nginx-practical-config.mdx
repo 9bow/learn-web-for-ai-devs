@@ -8,8 +8,7 @@ learning_objectives:
   - "Let's Encrypt를 이용한 SSL 설정과 HTTP→HTTPS 리다이렉트를 구성할 수 있다"
   - "gzip 압축과 client_max_body_size 설정이 AI 서비스에서 어떤 영향을 미치는지 설명할 수 있다"
 prerequisites:
-  - "02-04 챕터 완료 (정적 vs 동적, 리버스 프록시 개념)"
-  - "Linux 기본 명령어 이해"
+  - "02-04-static-vs-dynamic"
 estimated_minutes: 20
 references:
   - title: "nginx — Full Example Configuration"
@@ -37,6 +36,16 @@ nginx.conf
                 location /api/ { ... }
           }
     }
+```
+
+```text
+┌───────────┐   HTTPS   ┌──────────┐   /api/   ┌───────────┐
+│ Browser   │──────────▶│ nginx    │─────────▶│ FastAPI   │
+└───────────┘           │ TLS·route│           └───────────┘
+                        └────┬─────┘
+                             │ /
+                             ▼
+                       정적 React 자산
 ```
 
 ## 실전 nginx.conf 전체 예시

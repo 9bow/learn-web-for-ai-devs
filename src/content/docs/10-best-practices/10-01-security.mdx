@@ -4,12 +4,11 @@ description: 웹 서비스에서 반드시 알아야 할 보안 위협과 FastAP
 sidebar:
   order: 1
 learning_objectives:
-  - "CORS, CSRF, SQL Injection, XSS 각 공격의 원리와 방어법을 설명할 수 있다"
-  - "비밀번호 해싱과 JWT 토큰 보안을 올바르게 구현할 수 있다"
+  - "CORS와 CSRF의 역할을 구분하고, SQL Injection·XSS 방어법을 설명할 수 있다"
+  - "토큰·비밀번호·AI 도구 호출의 보안 경계를 설계할 수 있다"
   - "rate limiting으로 무차별 대입 공격을 방어할 수 있다"
 prerequisites:
-  - "FastAPI 기초 (섹션 07)"
-  - "HTTP 기초 (섹션 01)"
+  - "07-05-auth-jwt-oauth"
 estimated_minutes: 25
 references:
   - title: "OWASP Top Ten"
@@ -21,13 +20,22 @@ references:
   - title: "passlib 문서"
     url: "https://passlib.readthedocs.io/en/stable/"
     accessed: "2026-04-14"
+  - title: "RFC 8725: JSON Web Token Best Current Practices"
+    url: "https://datatracker.ietf.org/doc/html/rfc8725"
+    accessed: "2026-08-28"
+  - title: "W3C Trusted Types"
+    url: "https://www.w3.org/TR/trusted-types/"
+    accessed: "2026-08-28"
+  - title: "OWASP Top 10 for LLM Applications"
+    url: "https://genai.owasp.org/llm-top-10/"
+    accessed: "2026-08-28"
 ---
 
 ML 모델을 서빙하는 서비스도 결국은 웹 서비스다. 추론 속도를 1ms 줄이는 것도 중요하지만, 인증 우회 한 방에 전체 시스템이 뚫리면 의미가 없다. 이 챕터는 **OWASP Top 10** 기준으로 AI/웹 서비스에서 자주 만나는 보안 위협과 FastAPI 기반 대응법을 다룬다.
 
 ## CORS — 교차 출처 리소스 공유
 
-CORS는 브라우저가 다른 origin의 API를 호출할 때 적용하는 정책이다. 잘못 설정하면 악성 사이트가 로그인된 사용자 대신 API를 호출할 수 있다.
+CORS는 브라우저가 다른 origin의 응답을 JavaScript가 읽을 수 있는지 판단하는 정책이다. CORS는 서버의 인증·인가나 CSRF 방어가 아니며, 비브라우저 클라이언트는 CORS 제약을 받지 않는다.
 
 ```python
 # 나쁜 설정 — 모든 origin 허용
@@ -48,7 +56,7 @@ app.add_middleware(
 )
 ```
 
-프로덕션에서 nginx로 same-origin 배포를 하면 CORS 미들웨어 자체가 불필요해진다.
+프로덕션에서 same-origin 배포를 하면 CORS 응답 헤더가 필요하지 않을 수 있다. 그래도 인증·인가, CSRF 방어, 입력 검증은 별도로 유지해야 한다.
 
 ## CSRF — 사이트 간 요청 위조
 
@@ -111,7 +119,20 @@ return <div>{userInput}</div>  // 안전
 return <div dangerouslySetInnerHTML={{ __html: userInput }} />  // XSS 취약!
 ```
 
-백엔드에서 HTML을 반환해야 한다면 `bleach` 같은 라이브러리로 sanitize한다.
+백엔드에서 HTML을 반환해야 한다면 신뢰 경계를 정하고 검증된 sanitizer를 사용한다. 콘텐츠 보안 정책(CSP)과 Trusted Types는 DOM XSS의 방어층이 될 수 있지만, 이들도 출력 인코딩과 sanitizer를 대체하지 않는다.
+
+## AI 입력·도구 호출의 경계
+
+모델 출력과 검색 문서는 신뢰할 수 없는 입력으로 다룬다. 프롬프트 인젝션으로 모델이 도구 호출이나 민감 정보 노출을 유도받을 수 있으므로, 모델이 제안한 도구 이름·인자·URL을 그대로 실행하면 안 된다.
+
+```text
+사용자/문서/모델 출력
+          │  신뢰하지 않음
+          ▼
+서버 측 정책 검사 ──▶ 권한 확인 ──▶ 허용된 도구·인자만 실행
+```
+
+도구 실행은 서버에서 allowlist, 사용자별 권한, 입력 스키마, 외부 URL 제한을 적용한다. 모델에 API key를 전달하거나 브라우저에 장기 비밀을 넣지 않는다.
 
 ## 비밀번호 해싱
 
@@ -165,12 +186,13 @@ ML 추론 엔드포인트도 rate limiting을 적용한다. GPU 자원을 무한
 | 항목 | 위험도 | 확인 |
 |------|--------|------|
 | CORS allow_origins에 와일드카드(`*`) + credentials 조합 금지 | Critical | ☐ |
-| 비밀번호 bcrypt 해싱 (MD5/SHA1 금지) | Critical | ☐ |
+| 비밀번호 memory-hard 해싱 우선 검토, MD5/SHA1 금지 | Critical | ☐ |
 | SQL 쿼리에 f-string 사용 금지 | Critical | ☐ |
 | JWT secret key 환경변수 관리 (코드에 하드코딩 금지) | Critical | ☐ |
 | 로그인 엔드포인트 rate limiting | High | ☐ |
 | 쿠키에 HttpOnly + SameSite 설정 | High | ☐ |
 | `dangerouslySetInnerHTML` 사용 금지 (불가피하면 sanitize) | High | ☐ |
+| 모델 제안 도구 호출을 서버에서 allowlist·권한·스키마로 검증 | High | ☐ |
 | HTTPS 강제 (프로덕션) | High | ☐ |
 | 에러 메시지에 내부 정보 노출 금지 | Medium | ☐ |
 | 민감한 필드 응답에서 제외 (password hash 등) | Medium | ☐ |
@@ -178,8 +200,8 @@ ML 추론 엔드포인트도 rate limiting을 적용한다. GPU 자원을 무한
 
 ## 핵심 정리
 
-- **CORS** — allow_origins를 명시적으로 지정하고, same-origin 배포로 아예 없애는 것이 최선이다.
+- **CORS** — 브라우저의 응답 접근 제어다. 허용 origin을 명시하되 인증·인가나 CSRF 방어로 사용하지 않는다.
 - **SQL Injection** — SQLAlchemy ORM을 쓰거나 파라미터 바인딩을 사용하면 기본적으로 안전하다.
-- **비밀번호** — bcrypt로 해싱. 평문 저장과 MD5/SHA1은 현재 기준으로 심각한 취약점이다.
+- **비밀번호** — 평문과 MD5/SHA-1은 금지한다. 새 시스템은 memory-hard 해싱을 우선 검토하고 bcrypt는 호환 요구에 맞춰 쓴다.
 - **Rate limiting** — 로그인과 ML 추론 엔드포인트에는 반드시 적용한다.
 - 보안은 체크리스트로 관리한다. 기억에 의존하면 놓친다.

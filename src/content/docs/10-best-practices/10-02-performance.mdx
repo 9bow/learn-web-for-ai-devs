@@ -8,9 +8,7 @@ learning_objectives:
   - "번들 최적화, lazy loading, CDN으로 프론트엔드 로딩 속도를 개선할 수 있다"
   - "lifespan과 배치 추론으로 ML 모델 서빙 처리량을 높일 수 있다"
 prerequisites:
-  - "FastAPI 기초 (섹션 07)"
-  - "React와 Next.js (섹션 06)"
-  - "ML 모델 서빙 기본 경험"
+  - "10-01-security"
 estimated_minutes: 25
 references:
   - title: "FastAPI 성능 가이드"
@@ -45,20 +43,17 @@ async def get_todos(db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 ```
 
-CPU bound 작업(ML 추론 등)은 `asyncio.run_in_executor`로 스레드 풀에 오프로드한다.
+`async`는 주로 네트워크·DB 같은 I/O 대기를 효율적으로 처리한다. CPU bound 작업은 프로세스·작업 큐 같은 별도 실행 경계를 검토하고, GPU 모델 추론은 모델 서버의 동시성·배치·메모리 정책에 맞춰 별도 worker로 운영한다. 단순히 모든 추론을 웹 프로세스의 thread pool에 넣는 것은 모델 라이브러리와 GPU 자원 경합을 숨길 수 있다.
 
 ```python
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
-executor = ThreadPoolExecutor(max_workers=4)
-
-@app.post("/api/predict")
-async def predict(data: PredictRequest):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(executor, model.predict, data.features)
-    return {"prediction": result}
+@app.post("/api/prediction-jobs", status_code=202)
+async def submit_prediction(data: PredictRequest):
+    # 예시: 검증 뒤 별도 worker queue에 작업을 제출한다.
+    job_id = await job_queue.submit(data.model_dump())
+    return {"job_id": job_id, "status": "queued"}
 ```
+
+짧고 가벼운 CPU 작업에 executor가 적합할 수는 있지만, worker 수·큐 길이·취소·재시도·모델 메모리의 소유자를 명시적으로 관리해야 한다.
 
 ### DB 인덱스
 
@@ -238,13 +233,13 @@ async def process_batch():
 
 @app.post("/api/predict")
 async def predict(request: PredictRequest):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     future = loop.create_future()
     batch_queue.append({"input": request.text, "future": future})
     return {"result": await future}
 ```
 
-GPU 배치 처리는 단일 처리 대비 처리량이 4~8배 증가한다.
+GPU 배치는 처리량을 높일 수 있지만 대기열 때문에 지연 시간이 늘 수도 있다. 배치 크기와 대기 시간은 모델·GPU 메모리·SLO로 측정해 정한다.
 
 ## 성능 목표 기준
 

@@ -8,8 +8,7 @@ learning_objectives:
   - "SQLite가 적합한 유스케이스와 부적합한 유스케이스를 구분한다"
   - "WAL 모드로 동시성을 개선하는 방법을 안다"
 prerequisites:
-  - "SQL 기초 (SELECT, INSERT, UPDATE, DELETE)"
-  - "파일 시스템 기본 이해"
+  - "07-02-fastapi-overview"
 estimated_minutes: 20
 references:
   - title: "SQLite 공식 문서"
@@ -25,6 +24,13 @@ ML 프로젝트를 시작할 때 PostgreSQL을 설치하고 설정하는 것은 
 ## SQLite란
 
 SQLite는 **서버가 없는(serverless) 임베디드 관계형 데이터베이스**다. 별도 프로세스 없이 애플리케이션 프로세스 안에서 직접 DB 파일을 읽고 쓴다.
+
+```text
+┌──────────────┐  SQL / file I/O  ┌──────────────┐
+│ 애플리케이션 │─────────────────▶│ myapp.db     │
+│ (한 프로세스)│                  │ SQLite 파일  │
+└──────────────┘                  └──────────────┘
+```
 
 ```text
 PostgreSQL 구조:              SQLite 구조:

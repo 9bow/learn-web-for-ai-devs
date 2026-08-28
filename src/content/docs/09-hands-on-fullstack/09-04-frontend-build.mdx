@@ -8,9 +8,7 @@ learning_objectives:
   - "useState + useEffect로 서버 상태를 관리할 수 있다"
   - "로딩·에러 상태를 UI에 반영하는 패턴을 적용할 수 있다"
 prerequisites:
-  - "09-03 백엔드 빌드 완료"
-  - "React 기초 (섹션 06)"
-  - "TypeScript 기초"
+  - "09-03-backend-build"
 estimated_minutes: 40
 references:
   - title: "React useEffect"
@@ -22,6 +20,13 @@ references:
 ---
 
 프론트엔드는 다섯 파일로 구성된다. `api.ts` 가 서버와 대화하고, 컴포넌트들은 그 결과를 화면에 표시한다.
+
+```text
+┌──────────────┐  요청/응답  ┌──────────┐  JSON  ┌──────────┐
+│ React 상태   │────────────▶│ api.ts   │───────▶│ FastAPI  │
+│ loading/error│◀────────────│ 오류 변환│◀───────│ /api     │
+└──────────────┘             └──────────┘       └──────────┘
+```
 
 ## api.ts — fetch 래퍼와 타입 정의
 

@@ -6,10 +6,9 @@ sidebar:
 learning_objectives:
   - "text/event-stream 포맷의 필드 구조를 설명할 수 있다"
   - "SSE가 LLM 스트리밍에 적합한 이유를 WebSocket과 비교해 설명할 수 있다"
-  - "FastAPI StreamingResponse와 nginx 버퍼링 비활성화를 설정할 수 있다"
+  - "FastAPI StreamingResponse, 프록시 버퍼링, 연결 종료·재연결 처리를 함께 점검할 수 있다"
 prerequisites:
-  - "HTTP 응답 헤더와 Content-Type 기본 이해"
-  - "03-01 WebSocket 기초 (비교 맥락)"
+  - "03-01-websocket-basics"
 estimated_minutes: 20
 references:
   - title: "WHATWG — Server-sent events"
@@ -123,7 +122,7 @@ async def stream_response(body: dict):
     )
 ```
 
-`X-Accel-Buffering: no` 헤더는 nginx에게 이 응답을 버퍼링하지 말라고 지시한다. 이 헤더가 없으면 nginx가 응답을 모아서 한꺼번에 전송해 스트리밍 효과가 사라진다.
+`X-Accel-Buffering: no` 헤더는 nginx에게 이 응답을 버퍼링하지 말라고 지시한다. 다만 실제 전달 여부는 프록시와 CDN 설정에도 달려 있으므로, 브라우저 개발자 도구에서 이벤트가 점진적으로 도착하는지 확인한다.
 
 ## 브라우저 EventSource 클라이언트
 
@@ -145,7 +144,7 @@ source.addEventListener("error", () => {
 });
 ```
 
-`EventSource`는 GET 요청만 지원한다. POST 바디로 프롬프트를 보내야 하는 경우에는 `fetch` API로 SSE 스트림을 직접 읽는 방식을 사용한다 (05 챕터에서 자세히 다룬다).
+`EventSource`는 GET 요청만 지원한다. POST 바디로 프롬프트를 보내야 하는 경우에는 `fetch` API로 응답 body를 읽는 방식을 사용한다. 이때 네트워크 청크가 SSE 이벤트 경계와 일치하지 않으므로 청크마다 단순 줄 분할하지 말고, 남은 버퍼를 보존하는 파서를 사용해야 한다.
 
 ## nginx 설정
 
@@ -154,14 +153,12 @@ location /stream {
     proxy_pass http://backend:8000;
     proxy_buffering off;          # 서버→nginx 버퍼링 비활성화
     proxy_cache off;
-    proxy_set_header Connection "";
     proxy_http_version 1.1;
     proxy_read_timeout 300s;      # 긴 스트림을 위한 타임아웃 연장
-    chunked_transfer_encoding on;
 }
 ```
 
-`proxy_buffering off`를 설정하지 않으면 nginx가 백엔드 응답을 버퍼에 모았다가 한꺼번에 보내서 실시간 스트리밍이 깨진다.
+`proxy_buffering off`를 설정하지 않으면 nginx가 백엔드 응답을 버퍼에 모았다가 한꺼번에 보내서 실시간 스트리밍이 깨질 수 있다. 타임아웃은 모델의 최대 응답 시간과 heartbeat 정책에 맞추고, 재연결을 지원한다면 `id:`와 `Last-Event-ID`를 실제 저장 가능한 이벤트 순서와 연결한다.
 
 ## 핵심 정리
 
@@ -169,4 +166,4 @@ location /stream {
 - 브라우저 `EventSource`가 자동 재연결을 처리하므로 WebSocket 대비 구현이 단순하다
 - LLM 토큰 스트리밍은 단방향이므로 SSE가 WebSocket보다 적합하다
 - FastAPI에서 `StreamingResponse`와 `async generator`를 조합해 구현한다
-- nginx에서는 `proxy_buffering off`와 `X-Accel-Buffering: no` 헤더가 필수다
+- nginx에서는 `proxy_buffering off`와 `X-Accel-Buffering: no`를 검토하고, 실제 CDN·프록시 경로에서 점진 전달을 검증한다

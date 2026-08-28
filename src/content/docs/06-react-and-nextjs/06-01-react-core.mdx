@@ -1,15 +1,14 @@
 ---
-title: "React의 핵심: 선언적 UI와 가상 DOM"
-description: React가 UI를 선언적으로 다루는 방식과 Virtual DOM의 동작 원리를 이해한다
+title: "React의 핵심: 선언적 UI와 렌더링"
+description: React가 UI를 선언적으로 다루고 render와 commit 단계로 화면을 갱신하는 방식을 이해한다
 sidebar:
   order: 1
 learning_objectives:
   - "명령적 DOM 조작과 선언적 UI의 차이를 설명한다"
-  - "Virtual DOM이 실제 DOM 업데이트를 최소화하는 방식을 이해한다"
+  - "React의 render와 commit, reconciliation이 UI 갱신에 어떤 역할을 하는지 이해한다"
   - "JSX가 JavaScript로 변환되는 과정을 파악한다"
 prerequisites:
-  - "HTML/CSS 기본 이해"
-  - "JavaScript 기초 (ES6+)"
+  - "05-05-csr-ssr-ssg"
 estimated_minutes: 20
 references:
   - title: "React 공식 문서 - Describing the UI"
@@ -65,26 +64,26 @@ function LikeButton() {
 
 상태(`count`)가 UI의 유일한 진실 공급원(single source of truth)이다. 상태가 바뀌면 React가 알아서 UI를 다시 그린다. 개발자는 "count가 이 값일 때 UI는 이렇게 생겨야 한다"만 선언하면 된다.
 
-## Virtual DOM
+## render, reconciliation, commit
 
 선언적 UI의 문제: 상태가 바뀔 때마다 화면 전체를 다시 그리면 느리지 않을까?
 
-실제 DOM 조작은 비싸다. 레이아웃 재계산, 페인팅이 일어나기 때문이다. React는 이 문제를 **Virtual DOM** 으로 해결한다.
+React는 상태가 바뀌면 컴포넌트를 다시 호출해 다음 UI를 계산(render)하고, 이전 UI와 비교(reconciliation)한 뒤 필요한 DOM 변경을 적용(commit)한다. 이 과정은 선언적 UI를 구현하는 모델이지, 자동으로 성능을 보장하는 규칙은 아니다.
 
 ```text
 상태 변경 발생
        │
        ▼
-새 Virtual DOM 트리 생성 (순수 JavaScript 객체)
+다음 UI 트리 계산
        │
        ▼
-이전 Virtual DOM과 비교 (Diffing/Reconciliation)
+이전 결과와 비교 (Reconciliation)
        │
        ▼
-변경된 부분만 실제 DOM에 적용 (Patching)
+필요한 DOM 변경 적용 (Commit)
 ```
 
-Virtual DOM은 실제 DOM의 가벼운 JavaScript 표현이다. 메모리 안에서 새 트리와 이전 트리를 비교(diff)해서, 달라진 노드만 실제 DOM에 반영한다. 전체를 다시 그리지 않고 최소한의 DOM 조작만 수행한다.
+이 설명에서 흔히 말하는 Virtual DOM은 React가 UI를 계산하고 비교하는 내부 표현을 가리킨다. 개발자는 내부 표현보다 상태, props, key, render 결과가 일관되도록 작성하는 데 집중해야 한다. 느린 화면은 불필요한 렌더, 큰 목록, 네트워크·이미지 비용을 프로파일링해서 해결한다.
 
 ### Diffing 규칙
 
@@ -116,7 +115,7 @@ import { jsx as _jsx } from 'react/jsx-runtime'
 const element = _jsx('h1', { className: 'title', children: '안녕하세요' })
 ```
 
-JSX는 결국 함수 호출이다. `React.createElement(type, props, children)` 를 반환하며, 이것이 Virtual DOM 노드가 된다.
+JSX는 빌드 도구가 `react/jsx-runtime` 호출로 변환하는 문법 확장이다. 최신 변환은 항상 `React.createElement`를 직접 호출하지는 않는다.
 
 ### JSX 규칙 요약
 
@@ -170,12 +169,12 @@ function Counter() {
 export default Counter
 ```
 
-`count`가 바뀌면 React는 새 Virtual DOM을 만들고, 이전 것과 비교해서 변경된 텍스트 노드와 조건부 `<p>` 요소만 실제 DOM에 반영한다.
+`count`가 바뀌면 React는 다음 UI를 render하고 이전 결과와 reconciliation한 뒤 필요한 DOM 변경을 commit한다.
 
 ## 핵심 정리
 
 - **선언적 UI** 는 "어떤 상태일 때 UI가 어떻게 보여야 하는가"를 기술한다 — DOM 조작을 직접 하지 않는다
-- **Virtual DOM** 은 변경된 부분만 실제 DOM에 반영해 성능을 확보한다 — 매번 전체를 다시 그리지 않는다
+- **render / reconciliation / commit** 은 React가 선언한 UI를 실제 DOM에 반영하는 과정이다. 성능은 이 과정 자체가 아니라 실제 측정과 설계로 판단한다
 - **JSX** 는 `React.createElement` 함수 호출로 변환된다 — 브라우저가 아닌 빌드 도구가 처리한다
 - **상태(state)는 불변** 으로 다뤄야 한다 — 직접 변경하지 않고 setter 함수를 통해 교체한다
 - **key** 는 리스트 diff의 성능을 결정한다 — 인덱스 대신 고유 ID를 사용한다

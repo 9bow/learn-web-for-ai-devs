@@ -8,9 +8,7 @@ learning_objectives:
   - "FastAPI에서 HuggingFace TextIteratorStreamer를 연동해 토큰 스트리밍을 구현할 수 있다"
   - "AbortController로 스트리밍 취소를 처리하고 backpressure 문제를 이해한다"
 prerequisites:
-  - "03-02 Server-Sent Events 기본 이해"
-  - "HuggingFace transformers 라이브러리 기본 사용 경험"
-  - "React 기초 (useState, useEffect)"
+  - "03-04-grpc-http2"
 estimated_minutes: 28
 references:
   - title: "OpenAI API — Streaming"
@@ -25,9 +23,12 @@ references:
   - title: "HuggingFace — Text Generation with Streaming"
     url: "https://huggingface.co/docs/transformers/generation_strategies#streaming"
     accessed: "2026-04-14"
+  - title: "WHATWG Streams Standard"
+    url: "https://streams.spec.whatwg.org/"
+    accessed: "2026-08-28"
 ---
 
-LLM API를 사용하는 서비스를 만든다면 스트리밍 응답은 선택이 아닌 필수다. 사용자가 수십 초를 기다리지 않으려면 토큰이 생성되는 즉시 화면에 표시해야 한다. 이 챕터에서는 주요 API의 스트림 포맷을 분석하고, 직접 모델을 서빙할 때의 구현 패턴을 다룬다.
+LLM API에서 긴 응답의 대기 시간을 줄이고 싶다면 스트리밍이 유용하다. 다만 모든 요청에 반드시 필요한 것은 아니다. 짧은 결과, 배치 작업, 감사가 먼저 필요한 작업은 일반 응답이나 비동기 작업으로 처리할 수 있다. 이 챕터에서는 주요 API의 스트림 포맷을 분석하고, 직접 모델을 서빙할 때의 구현 패턴을 다룬다.
 
 ## OpenAI 스트리밍 포맷 분석
 
@@ -182,19 +183,29 @@ function useLLMStream() {
         signal: abortRef.current.signal,
       });
 
-      const reader = response.body!.getReader();
+      if (!response.ok || !response.body) throw new Error("스트림을 시작할 수 없습니다.");
+
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n").filter((l) => l.startsWith("data: "));
+        buffer += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const event = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = event
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
 
-        for (const line of lines) {
-          const data = line.slice(6); // "data: " 제거
-          if (data === "[DONE]") break;
+          if (!data) continue;
+          if (data === "[DONE]") return;
 
           const { token } = JSON.parse(data);
           setState((prev) => ({ ...prev, text: prev.text + token }));
@@ -228,11 +239,11 @@ AbortController.abort() 호출
       ↓
 fetch 요청에 연결된 스트림 즉시 중단
       ↓
-서버는 다음 yield 시점에 연결 끊김 감지
+서버의 request.is_disconnected() 또는 취소 신호 확인
       ↓
-FastAPI generator에서 GeneratorExit 발생
+모델 worker에 협력적 취소 요청
       ↓
-모델 생성 스레드는 streamer가 닫히면서 중단 신호 수신
+worker가 지원할 때만 생성 중단 및 자원 회수
 ```
 
 ### Backpressure 문제
@@ -246,7 +257,7 @@ FastAPI generator에서 GeneratorExit 발생
 3. 서버 측 최대 버퍼 크기 제한
 ```
 
-FastAPI의 `StreamingResponse`는 async generator를 스트림으로 내보내는 기본 도구다. 단, 오래 걸리는 모델 생성이나 별도 스레드 작업을 붙일 때는 연결 해제를 "항상 자동으로 즉시 중단된다"고 가정하지 말고, `await asyncio.sleep(0)`처럼 취소 지점을 두거나 `Request.is_disconnected()`로 클라이언트 연결 상태를 확인하는 패턴을 함께 고려한다.
+FastAPI의 `StreamingResponse`는 async generator를 스트림으로 내보내는 기본 도구다. 단, 브라우저의 `AbortController`는 클라이언트 연결을 취소할 뿐 별도 스레드·원격 추론 서버의 모델 생성을 자동으로 멈추게 하지 않는다. `Request.is_disconnected()` 확인, worker가 이해하는 취소 신호, 최대 생성 길이와 큐 제한을 함께 설계해야 한다.
 
 ## 토큰 수준 오류 처리
 
@@ -268,6 +279,6 @@ async def generate_tokens_safe(prompt: str):
 - OpenAI의 새 프로젝트는 Responses API를 우선 검토하고, Chat Completions 호환 스트림에서는 `data: {...}` + `data: [DONE]` 패턴을 이해한다
 - Anthropic은 `event:` 타입으로 메시지 시작, 델타, 종료 단계를 구분한다
 - HuggingFace `TextIteratorStreamer`와 별도 스레드로 동기 모델 추론을 비동기 스트림으로 변환한다
-- 브라우저에서 POST + 스트림은 `fetch` API로 `response.body.getReader()`를 사용한다
-- `AbortController`로 사용자가 생성을 취소하면 서버 generator도 연쇄적으로 종료된다
+- 브라우저에서 POST + 스트림은 `fetch` API로 `response.body.getReader()`를 사용하고, 네트워크 청크 경계를 넘는 SSE 이벤트를 버퍼링해 파싱한다
+- `AbortController`는 브라우저 연결을 취소한다. 모델 생성 중단은 서버와 worker가 협력적으로 구현해야 한다
 - 스트림 중간 오류는 HTTP 상태 코드 대신 `event: error` SSE 이벤트로 전달한다

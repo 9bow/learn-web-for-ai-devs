@@ -1,26 +1,25 @@
 ---
-title: "인증/인가: JWT, OAuth, API Key"
-description: 세션 쿠키 vs JWT의 차이, JWT 구조, FastAPI OAuth2PasswordBearer, API Key, bcrypt로 안전한 인증을 구현한다
+title: "인증/인가: 세션, JWT, OAuth, API Key"
+description: 세션 쿠키·JWT·OAuth/OIDC·API Key의 역할을 구분하고, 현재 보안 권고에 맞춰 선택한다
 sidebar:
   order: 5
 learning_objectives:
   - "세션 쿠키와 JWT의 동작 방식과 트레이드오프를 설명한다"
-  - "JWT 구조(Header.Payload.Signature)를 이해하고 FastAPI에서 구현한다"
-  - "비밀번호 해싱(bcrypt)과 API Key 인증을 올바르게 적용한다"
+  - "JWT 구조와 검증 조건(허용 알고리즘, issuer, audience, 만료)을 설명한다"
+  - "OAuth/OIDC의 authorization code + PKCE 흐름과 API Key의 적용 범위를 구분한다"
 prerequisites:
-  - "FastAPI 기본 이해 (07-02)"
-  - "HTTP 요청/응답 구조 이해"
+  - "07-04-fastapi-nginx-prod"
 estimated_minutes: 20
 references:
   - title: "FastAPI 공식 문서 - Security"
     url: "https://fastapi.tiangolo.com/tutorial/security/"
     accessed: "2026-04-14"
-  - title: "JWT 공식 사이트"
-    url: "https://jwt.io/introduction"
-    accessed: "2026-04-14"
-  - title: "python-jose 문서"
-    url: "https://python-jose.readthedocs.io/en/latest/"
-    accessed: "2026-04-14"
+  - title: "RFC 9700: Best Current Practice for OAuth 2.0 Security"
+    url: "https://datatracker.ietf.org/doc/html/rfc9700"
+    accessed: "2026-08-28"
+  - title: "RFC 8725: JSON Web Token Best Current Practices"
+    url: "https://datatracker.ietf.org/doc/html/rfc8725"
+    accessed: "2026-08-28"
 ---
 
 AI 서비스를 외부에 공개할 때 반드시 인증(Authentication: 누구인가)과 인가(Authorization: 무엇을 할 수 있는가)가 필요하다. FastAPI는 이를 위한 여러 도구를 기본 제공한다.
@@ -37,7 +36,7 @@ AI 서비스를 외부에 공개할 때 반드시 인증(Authentication: 누구�
 | 토큰 무효화 | 즉시 가능 (DB 삭제) | 만료 전까지 어려움 |
 | 페이로드 크기 | 작음 (세션 ID만) | 크거나 중간 (클레임 포함) |
 
-**AI API 서버라면 JWT가 더 일반적이다.** 여러 서버에 걸쳐 실행되는 인퍼런스 클러스터에서 세션 공유 없이 인증이 가능하기 때문이다.
+여러 서버에 걸쳐 실행된다고 해서 JWT가 자동으로 정답은 아니다. 브라우저 사용자 로그인에는 서버 세션 또는 OpenID Connect 기반 로그인이 적합할 수 있고, 독립적인 API 소비자에는 짧은 수명의 access token 또는 회전 가능한 API key가 적합할 수 있다. 즉, 사용자 유형, 토큰 폐기 요구, 브라우저 노출 여부를 기준으로 선택한다.
 
 ## JWT 구조
 
@@ -73,13 +72,14 @@ pip install python-jose[cryptography] passlib[bcrypt] python-multipart
 
 ```python
 # auth.py
+import os
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-SECRET_KEY = "your-secret-key-change-in-production"  # 실제 환경에서는 환경변수로
+SECRET_KEY = os.environ["JWT_SECRET"]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -175,6 +175,10 @@ async def run_inference(
     return {"result": "inference result", "user": current_user["username"]}
 ```
 
+## OAuth/OIDC: 로그인 위임에는 Authorization Code + PKCE
+
+`OAuth2PasswordBearer`는 FastAPI가 Authorization 헤더를 읽고 OpenAPI 보안 스키마를 표시하도록 돕는 도구이지, 외부 IdP 로그인 흐름 전체를 구현하지 않는다. 브라우저 기반 OAuth/OIDC 클라이언트는 authorization code 흐름과 PKCE를 사용하고, redirect URI를 정확히 등록·검증해야 한다. RFC 9700은 public client에 PKCE를 요구하며, access token을 URL fragment로 전달하는 오래된 흐름을 새 설계의 기본으로 쓰지 않도록 권고한다.
+
 ## API Key 인증
 
 내부 서비스 간 통신이나 개발자 API에는 JWT보다 API Key가 더 단순하다.
@@ -215,9 +219,9 @@ curl -X POST https://api.example.com/v1/completions \
   -d '{"prompt": "안녕하세요"}'
 ```
 
-## bcrypt 비밀번호 해싱
+## 비밀번호 해싱
 
-비밀번호를 평문으로 저장하는 것은 절대 금지다. bcrypt는 의도적으로 느린 해시 함수로, 브루트포스 공격을 어렵게 만든다.
+비밀번호를 평문으로 저장하는 것은 절대 금지다. 새 시스템은 메모리-하드 password hashing 방식을 우선 검토하고, 기존 환경과의 호환이 필요할 때 bcrypt를 사용할 수 있다. 어떤 방식을 쓰든 라이브러리의 현재 권고, 적절한 cost, 재해시 정책을 운영 환경에서 검토한다.
 
 ```python
 from passlib.context import CryptContext
@@ -237,8 +241,8 @@ is_invalid = pwd_context.verify("wrong-password", hashed)  # False
 
 ## 핵심 정리
 
-- **JWT는 서버에 상태를 저장하지 않는다** — 서명 검증만으로 인증하므로 수평 확장에 유리하다
+- **JWT는 서버 저장소 없이 검증할 수 있지만 만능은 아니다** — 허용 알고리즘, 만료, issuer·audience를 검증하고 폐기 요구까지 고려한다
 - **JWT Payload는 누구나 디코딩 가능하다** — 민감한 정보를 넣으면 안 된다
-- **OAuth2PasswordBearer가 FastAPI의 표준 JWT 인증 방식이다** — Swagger UI 자동 연동이 장점이다
+- **OAuth/OIDC 로그인** — 브라우저 기반 클라이언트에는 authorization code + PKCE와 정확한 redirect URI 검증을 사용한다
 - **API Key는 서비스 간 통신에 단순하고 효과적이다** — `X-API-Key` 헤더로 전달한다
-- **bcrypt로 비밀번호를 반드시 해싱한다** — 평문 저장은 절대 금지이며, `passlib`이 이를 쉽게 처리한다
+- **비밀번호 해싱** — 평문 저장은 금지하고, 새 시스템은 메모리-하드 방식을 우선 검토하며 bcrypt는 호환 대안으로 쓴다

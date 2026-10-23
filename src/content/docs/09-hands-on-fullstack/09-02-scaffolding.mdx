@@ -17,6 +17,15 @@ references:
   - title: "FastAPI 설치"
     url: "https://fastapi.tiangolo.com/#installation"
     accessed: "2026-04-14"
+  - title: "Vite Getting Started"
+    url: "https://vite.dev/guide/"
+    accessed: "2026-10-23"
+  - title: "Node.js Releases"
+    url: "https://nodejs.org/en/about/previous-releases"
+    accessed: "2026-10-23"
+  - title: "FastAPI Release Notes"
+    url: "https://fastapi.tiangolo.com/release-notes/"
+    accessed: "2026-10-23"
 ---
 
 앱을 만들기 전에 두 개의 독립적인 프로젝트 — 백엔드(Python)와 프론트엔드(Node) — 를 하나의 저장소에 구성한다.
@@ -25,8 +34,8 @@ references:
 
 ```bash
 python --version   # 3.11 이상
-node --version     # 20 이상
-pnpm --version     # 8 이상
+node --version     # 지원 중인 LTS. 예: Node 22.12 이상 또는 24 LTS
+pnpm --version     # 이 실습의 패키지 관리자: pnpm 10
 git --version
 ```
 
@@ -58,14 +67,7 @@ pip install fastapi uvicorn sqlalchemy pydantic
 pip freeze > requirements.txt
 ```
 
-`requirements.txt` 내용 예시.
-
-```text
-fastapi==0.115.0
-uvicorn==0.30.6
-sqlalchemy==2.0.35
-pydantic==2.9.2
-```
+`pip freeze`로 실제 설치 버전을 기록한다. 2026-10-23 공식 문서의 FastAPI는 0.161.1, SQLAlchemy는 2.1.6이다. 이 교재의 기본 CRUD 예제는 별도 로컬 환경의 FastAPI 0.115.6·SQLAlchemy 2.0.36에서도 검사했으며, 이것을 최신 버전이라는 뜻으로 해석하지 않는다. 새 환경에서는 지원 중인 버전으로 테스트하고 잠금 파일을 보관한다.
 
 ### 패키지 디렉토리 구조 초기화
 
@@ -100,7 +102,7 @@ uvicorn app.main:app --reload --port 8000
 
 ```bash
 cd ..   # ai-summary-todo 루트로
-pnpm create vite frontend -- --template react-ts
+pnpm create vite frontend --template react-ts
 cd frontend
 pnpm install
 ```
@@ -148,7 +150,7 @@ DATABASE_URL=sqlite:///./app.db
 CORS_ORIGINS=http://localhost:5173
 ```
 
-`.env` 는 실제 값을 채우고 절대 커밋하지 않는다.
+`.env`는 실제 값을 채우고 커밋하지 않는다. 파일을 만든 것만으로 Python이 자동 로드하지는 않는다. 아래 DB·CORS 예제는 프로세스 환경변수를 읽으므로 셸에서 export하거나 실행 환경에 주입한다. Docker Compose는 service의 environment로 전달한다.
 
 ## .gitignore 구성
 
@@ -159,6 +161,8 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/*.pyc
 backend/app.db
+backend/app.db-wal
+backend/app.db-shm
 
 # Node
 frontend/node_modules/
@@ -177,7 +181,7 @@ frontend/dist/
 ```bash
 cd ..   # ai-summary-todo 루트
 git add .gitignore .env.example backend/requirements.txt frontend/package.json frontend/vite.config.ts
-git commit -m "chore: project scaffolding — backend(FastAPI) + frontend(React+Vite)"
+git commit -m "chore: add FastAPI and React scaffolding"
 ```
 
 ## Claude Code로 스캐폴딩 자동화

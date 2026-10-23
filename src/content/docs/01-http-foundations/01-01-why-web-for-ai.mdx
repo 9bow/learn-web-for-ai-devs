@@ -18,6 +18,9 @@ references:
   - title: "MDN Web Docs: HTTP Overview"
     url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview"
     accessed: "2026-04-14"
+  - title: "OpenAI Migrate to the Responses API"
+    url: "https://developers.openai.com/api/docs/guides/migrate-to-responses"
+    accessed: "2026-10-23"
 ---
 
 ## "엔드포인트 주세요" — 모델 완성 이후의 세계
@@ -35,8 +38,8 @@ PyTorch로 모델을 학습할 때와 서빙할 때는 관심사가 근본적으
 | 구분 | 학습 (Training) | 서빙 (Serving) |
 |------|----------------|---------------|
 | 실행 단위 | 배치(batch) 처리 | 요청(request) 처리 |
-| 동시성 | 단일 프로세스로 GPU 점유 | 다수의 클라이언트 동시 처리 |
-| 상태 | Stateful (가중치 업데이트) | Stateless (요청마다 독립적) |
+| 동시성 | 단일 또는 분산 학습의 배치 연산 | 다수의 클라이언트 요청을 제한·배치 처리 |
+| 상태 | 가중치·옵티마이저 상태 갱신 | 가중치는 대개 읽기 전용, 대화·KV 캐시는 별도 상태 |
 | 실패 처리 | 체크포인트로 재시작 | 즉시 오류 응답 반환 |
 | 주요 도구 | PyTorch, HuggingFace Trainer | FastAPI, Uvicorn, nginx |
 
@@ -57,17 +60,18 @@ HTTP는 **언어 독립적** 이고, **방화벽 친화적** 이며, **도구 �
 ### OpenAI API
 
 ```http
-POST https://api.openai.com/v1/chat/completions
+POST /v1/responses HTTP/1.1
+Host: api.openai.com
 Authorization: Bearer sk-...
 Content-Type: application/json
 
 {
-  "model": "gpt-4o",
-  "messages": [{"role": "user", "content": "안녕하세요"}]
+  "model": "<사용 가능한 모델 ID>",
+  "input": "안녕하세요"
 }
 ```
 
-내부적으로 수백 개의 GPU 서버가 있지만 외부에는 단순한 HTTP 엔드포인트 하나만 노출합니다. 요청자는 내부 인프라를 전혀 알 필요가 없습니다.
+모델 ID는 계정에서 사용 가능한 값으로 바꿉니다. 위는 Responses API 요청 형태이며 인증이 필요한 유료 API를 여기서 실행하지는 않습니다. 내부 GPU 수를 알지 못해도 HTTP 계약으로 호출할 수 있습니다. 요청자는 내부 인프라를 전혀 알 필요가 없습니다.
 
 ### HuggingFace Inference Endpoints
 
@@ -83,7 +87,7 @@ Content-Type: application/json
 }
 ```
 
-내부적으로 HuggingFace는 Docker 컨테이너로 모델을 감싸고, nginx로 트래픽을 분산하며, HTTPS로 암호화합니다. 이 모든 것이 웹 기술의 조합입니다.
+배포 플랫폼은 모델 실행과 인증된 HTTPS 접근을 관리합니다. 내부 프록시 제품을 특정하지 않아도 요청·응답 계약으로 서비스를 사용할 수 있습니다.
 
 ### Replicate
 
@@ -108,18 +112,19 @@ from pydantic import BaseModel
 import torch
 
 app = FastAPI()
-model = torch.load("my_model.pt")
+model = torch.nn.Linear(4, 2).eval()  # 학습하지 않은 HTTP 연결 확인용 모델
 
 class PredictRequest(BaseModel):
-    text: str
+    features: tuple[float, float, float, float]
 
 @app.post("/predict")
-async def predict(request: PredictRequest):
-    result = model(request.text)
-    return {"prediction": result}
+def predict(request: PredictRequest):
+    with torch.inference_mode():
+        result = model(torch.tensor(request.features, dtype=torch.float32))
+    return {"prediction": result.tolist()}
 ```
 
-이 코드 몇 줄이 바로 "엔드포인트"입니다. 팀원이 요청하는 것은 바로 이런 HTTP 서버입니다. 그리고 이것을 제대로 만들려면 HTTP 프로토콜, 서버 아키텍처, 보안, 배포 방법을 이해해야 합니다.
+예를 들어 `{ "features": [1, 2, 3, 4] }`를 전송합니다. 모델은 학습하지 않았으므로 출력은 품질 평가에 사용할 수 없습니다. CPU 추론은 `def` 경로로 실행하고 tensor는 JSON 배열로 변환했습니다. 이 코드 몇 줄이 바로 "엔드포인트"입니다. 팀원이 요청하는 것은 바로 이런 HTTP 서버입니다. 그리고 이것을 제대로 만들려면 HTTP 프로토콜, 서버 아키텍처, 보안, 배포 방법을 이해해야 합니다.
 
 ## 이 시리즈에서 배울 것
 

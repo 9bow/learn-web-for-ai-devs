@@ -16,7 +16,10 @@ references:
     accessed: "2026-04-14"
   - title: "SQLite EXPLAIN QUERY PLAN"
     url: "https://www.sqlite.org/eqp.html"
-    accessed: "2026-04-14"
+    accessed: "2026-10-23"
+  - title: "Alembic Autogenerate Limitations"
+    url: "https://alembic.sqlalchemy.org/en/latest/autogenerate.html"
+    accessed: "2026-10-23"
 ---
 
 `Base.metadata.create_all()` 은 개발 초기에 편리하지만, 프로덕션에서는 쓸 수 없다. 이미 데이터가 있는 테이블을 바꾸거나, 변경 이력을 관리하려면 마이그레이션 도구가 필요하다.
@@ -65,7 +68,7 @@ with engine.connect() as connection:
 alembic revision --autogenerate -m "create users and experiments tables"
 ```
 
-생성된 파일을 확인한다.
+생성된 파일을 검토한다. autogenerate는 테이블·컬럼 이름 변경이나 모든 제약을 완벽히 판별하지 않으므로 데이터 손실 여부를 직접 확인한다. SQLite에서 지원하지 않는 ALTER 작업은 Alembic batch migration을 검토한다.
 
 ```python
 # alembic/versions/a1b2c3d4_create_users_and_experiments_tables.py
@@ -164,7 +167,7 @@ def create_user_with_first_experiment(
         raise
 ```
 
-FastAPI의 `get_db` dependency가 commit/rollback을 자동 처리하므로, 일반적으로는 직접 `db.commit()` 을 호출하지 않는다. 명시적 트랜잭션 제어가 필요할 때만 위처럼 작성한다.
+FastAPI 자체는 DB commit을 수행하지 않는다. 앞 절의 dependency는 세션 정리를 담당하고 서비스·CRUD 함수가 응답 전에 commit한다. 이 예제처럼 두 작업을 묶는 서비스는 단일 commit을 소유하며, 중간 함수가 따로 commit하지 않도록 한다.
 
 ```python
 # Savepoint를 이용한 중첩 트랜잭션 (SQLAlchemy 2.0+)
@@ -239,7 +242,7 @@ for row in plan:
 (2, 0, 0, 'SEARCH experiments USING INDEX ix_experiments_owner_id (owner_id=?)')
 ```
 
-`SCAN` 이 나오면 인덱스 추가를 고려한다. 데이터가 적을 때는 차이가 없지만, 수십만 건이 넘으면 체감된다.
+`SCAN`은 테이블 또는 인덱스 전체 순회를 뜻하며, 결과가 많거나 정렬에 인덱스를 사용하는 경우에도 선택될 수 있다. `SCAN`만 보고 무조건 인덱스를 추가하지 않는다. 데이터가 적을 때는 차이가 없지만, 수십만 건이 넘으면 체감된다.
 
 ## 핵심 정리
 

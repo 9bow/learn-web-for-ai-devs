@@ -57,7 +57,7 @@ SPA 로딩 순서:
 7. 화면에 콘텐츠 표시 ← 여기까지 사용자는 빈 화면 또는 로딩 스피너만 봄
 ```
 
-JS 번들이 클수록, 네트워크가 느릴수록 사용자는 더 오래 빈 화면을 본다. Core Web Vitals 지표인 LCP(Largest Contentful Paint)가 낮아져 SEO에도 영향을 준다.
+JS 번들이 클수록, 네트워크가 느릴수록 사용자는 더 오래 빈 화면을 본다. Core Web Vitals 지표인 LCP(Largest Contentful Paint)가 길어져 사용자 경험과 검색 성과에 영향을 줄 수 있다.
 
 ## SSR로 해결
 
@@ -80,13 +80,13 @@ SEO 봇은 완성된 HTML을 받으므로 콘텐츠를 올바르게 인덱싱한
 
 | 방식 | HTML 생성 위치 | 데이터 패칭 시점 | SEO | TTFB | 예시 |
 |------|---------------|----------------|-----|------|------|
-| **CSR** | 브라우저 | 마운트 후 | 나쁨 | 빠름 | Create React App |
+| **CSR** | 브라우저 | 앱의 데이터 로딩 시 | 별도 고려 | 셸은 빠를 수 있음 | Vite + React |
 | **SSR** | 서버 (요청마다) | 서버에서 | 좋음 | 느림 | Next.js 동적 페이지 |
 | **SSG** | 빌드 타임 | 빌드 시 | 좋음 | 매우 빠름 | 문서, 블로그 |
 
 ## 왜 Node 서버가 필요한가
 
-SSR을 하려면 서버에서 React 컴포넌트를 실행해야 한다. React는 JavaScript로 작성되어 있으므로 JavaScript 런타임이 서버에 필요하다. 그것이 Node.js다.
+SSR을 하려면 서버에서 React 컴포넌트를 실행해야 한다. React는 JavaScript로 작성되어 있으므로 JavaScript 런타임이 서버에 필요하다. Next.js의 일반적인 서버 런타임은 Node.js다. 정적 export는 요청 시 React 렌더링 서버가 필요 없다.
 
 ```text
 순수 정적 파일 배포 (SPA):
@@ -132,7 +132,7 @@ SSR에서 한 가지 중요한 개념이 Hydration이다.
 브라우저: HTML 표시 → JS 로드 → React가 DOM과 연결(Hydrate)
 ```
 
-서버에서 생성된 HTML은 정적이다. 버튼을 클릭해도 아무 일이 일어나지 않는다. Hydration은 React가 이미 존재하는 DOM을 인식하고, 이벤트 핸들러와 상태를 연결하는 과정이다. 이후부터 인터랙션이 가능해진다.
+서버 HTML도 링크 이동과 기본 폼 제출은 동작한다. React 이벤트·상태가 필요한 인터랙션은 hydration 이후 연결된다. Hydration은 React가 이미 존재하는 DOM을 인식하고, 이벤트 핸들러와 상태를 연결하는 과정이다. 이후부터 인터랙션이 가능해진다.
 
 ## AI 서비스에서 Frontend 서버가 필요한가
 

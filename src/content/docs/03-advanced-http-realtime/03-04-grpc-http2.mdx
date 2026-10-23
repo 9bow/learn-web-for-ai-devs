@@ -20,9 +20,15 @@ references:
   - title: "Protocol Buffers — Language Guide (proto3)"
     url: "https://protobuf.dev/programming-guides/proto3/"
     accessed: "2026-04-14"
+  - title: "vLLM OpenAI-Compatible Server"
+    url: "https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/"
+    accessed: "2026-10-23"
+  - title: "Triton HTTP and gRPC Protocols"
+    url: "https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/customization_guide/inference_protocols.html"
+    accessed: "2026-10-23"
 ---
 
-ML 서비스를 운영하다 보면 vLLM, Text Generation Inference(TGI), Triton Inference Server 같은 추론 엔진과 통신해야 한다. 이 엔진들은 내부 API로 REST가 아닌 gRPC를 제공하는 경우가 많다. gRPC는 Google이 설계한 RPC 프레임워크로, **Protocol Buffers**로 메시지를 직렬화하고 **HTTP/2**로 전송한다.
+추론 엔진의 지원 프로토콜은 제품마다 다르다. Triton은 HTTP와 gRPC 엔드포인트를 제공한다. vLLM의 일반적인 `vllm serve` 경로는 OpenAI 호환 HTTP 서버이며, 이를 기본 gRPC 서버로 가정하면 안 된다. gRPC는 Google이 설계한 RPC 프레임워크로, **Protocol Buffers**로 메시지를 직렬화하고 **HTTP/2**로 전송한다.
 
 ## HTTP/2가 HTTP/1.1을 개선한 방식
 
@@ -109,7 +115,7 @@ Protobuf는 명시적 스키마와 코드 생성을 제공하는 바이너리 �
     |<--- (스트림 종료) --------|
 ```
 
-LLM 토큰 스트리밍에 직접 대응된다. vLLM의 내부 API가 이 방식을 사용한다.
+LLM 토큰 스트리밍 서비스를 이 형태로 설계할 수 있다. 아래 `.proto`는 개념 예제이며 vLLM의 실제 API 계약이 아니다.
 
 ### 3. Client Streaming RPC (클라이언트 스트리밍)
 
@@ -144,7 +150,7 @@ REST + JSON + SSE               gRPC + Protobuf
 (브라우저/SDK 친화적)            (성능, 타입 안전성)
 
 예시:
-nginx → FastAPI (REST/SSE) → vLLM gRPC 서버
+nginx → FastAPI (REST/SSE) → vLLM (OpenAI 호환 HTTP)
                            → Triton Inference Server (gRPC)
                            → 임베딩 서버 (gRPC)
 ```
@@ -170,5 +176,5 @@ AI 서비스 프론트엔드에서 직접 추론 서버를 호출할 필요는 �
 - HTTP/2는 단일 TCP 연결에서 멀티플렉싱으로 HTTP/1.1의 요청 직렬화를 완화하지만 TCP 수준의 HOL 블로킹은 남는다
 - gRPC는 Protobuf와 HTTP/2를 사용하는 선택지이며, REST/JSON보다 빠르다고 단정하지 말고 실제 workload로 비교한다
 - 4가지 RPC 유형 중 Server Streaming이 LLM 토큰 스트리밍과 직접 대응된다
-- vLLM, Triton 등 ML 추론 엔진은 내부 API로 gRPC를 사용한다
+- Triton의 gRPC와 vLLM의 OpenAI 호환 HTTP처럼 실제 엔진의 지원 API를 구분한다
 - 브라우저는 gRPC를 직접 호출할 수 없어 Envoy gRPC-Web 또는 REST 미들웨어를 사용한다

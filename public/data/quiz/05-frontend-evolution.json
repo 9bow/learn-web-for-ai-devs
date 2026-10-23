@@ -45,7 +45,7 @@
       "서버가 WebSocket으로 렌더링 명령을 전송한다"
     ],
     "answer": 1,
-    "explanation": "SPA는 초기에 단 한 번 HTML/JS/CSS를 로드한 후, 페이지 이동 시 JavaScript(React Router 등)가 History API로 URL을 변경하고 해당 컴포넌트를 동적으로 렌더링한다. 서버 요청은 데이터(API) 호출에만 사용된다."
+    "explanation": "브라우저 라우터는 전체 HTML 문서 이동 없이 History API와 UI 렌더링을 연결한다. API뿐 아니라 lazy 코드 청크 요청도 발생할 수 있다. pushState 자체는 popstate 이벤트를 발생시키지 않는다."
   },
   {
     "id": "q5",
@@ -81,7 +81,7 @@
       "이미지 최적화 자동화"
     ],
     "answer": 1,
-    "explanation": "SSG는 빌드 시점에 HTML을 생성하므로 콘텐츠가 바뀌면 전체 재빌드가 필요하다. ISR은 `revalidate` 옵션으로 특정 시간 후 해당 페이지만 백그라운드에서 재생성한다. 블로그 포스트처럼 하루에 몇 번 업데이트되는 콘텐츠에 적합하다."
+    "explanation": "기존 Next.js 캐시 모델의 revalidate는 만료 이후 요청에 따른 재검증 정책이다. 정확한 주기의 배치 스케줄러는 아니다. Cache Components를 켠 앱에서는 use cache·cacheLife와 해당 재검증 모델을 구분한다."
   },
   {
     "id": "q8",
@@ -105,7 +105,7 @@
       "CSS를 JavaScript로 변환하지 않기 때문이다"
     ],
     "answer": 1,
-    "explanation": "Webpack은 개발 시 전체 앱을 번들링한 후 서빙한다. Vite는 개발 모드에서 번들링 없이 브라우저가 직접 ES Modules를 로드하게 하고, esbuild로 각 파일을 필요할 때만 변환한다. 프로젝트가 클수록 Vite의 개발 서버 시작 속도 이점이 커진다."
+    "explanation": "Vite 개발 서버는 네이티브 ESM과 필요 시 변환·HMR을 활용한다. 의존성 사전 번들링도 존재하며 내부 변환 도구는 버전에 따라 달라진다. 개발 중 모든 파일을 번들링하지 않는 것과 의존성을 전혀 번들링하지 않는 것은 다르다."
   },
   {
     "id": "q10",
@@ -142,5 +142,17 @@
     ],
     "answer": 3,
     "explanation": "번들러(Webpack, Vite, Rollup 등)의 역할은 모듈 의존성 해석, 파일 번들링, Tree Shaking, 코드 트랜스파일, 에셋 최적화 등이다. 데이터베이스 쿼리 최적화는 번들러와 관계없는 백엔드 영역이다."
+  },
+  {
+    "id": "q13",
+    "question": "TypeScript에서 response.json() as User를 사용하면 외부 JSON이 User인지 실행 중에 검사되는가?",
+    "options": [
+      "그렇다. 타입 단언이 런타임 필드를 검증한다",
+      "아니다. 타입 단언은 정적 타입 정보이며 외부 입력은 별도 런타임 검증이 필요하다",
+      "JSON 파싱은 항상 실패한다",
+      "TypeScript는 서버 응답을 암호화한다"
+    ],
+    "answer": 1,
+    "explanation": "타입은 JavaScript로 변환할 때 제거된다. Vite의 변환과 tsc 타입 검사도 별개이며 타입 단언은 실제 데이터 구조를 바꾸거나 검사하지 않는다."
   }
 ]

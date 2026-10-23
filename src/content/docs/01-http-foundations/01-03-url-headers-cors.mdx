@@ -56,7 +56,7 @@ async def predict(model_id: str):
 @app.post("/predict")
 async def predict(lang: str = "ko", top_k: int = 5):
     ...
-    # GET /predict?lang=ko&top_k=5
+    # POST /predict?lang=ko&top_k=5
 ```
 
 경로 파라미터는 "어떤 리소스인지"를, 쿼리 파라미터는 "어떻게 처리할지"를 표현합니다.
@@ -107,7 +107,7 @@ async def predict(authorization: str = Header(None)):
 | `Cache-Control` | 양방향 | 캐싱 동작 제어 |
 | `X-RateLimit-Remaining` | 응답 | 남은 API 호출 횟수 |
 
-`X-`로 시작하는 헤더는 비표준 커스텀 헤더입니다. OpenAI와 HuggingFace는 `X-RateLimit-*` 헤더로 요청 한도 정보를 제공합니다.
+`X-` 접두사만으로 헤더의 표준 여부를 판정하지 않습니다. 제공자마다 rate limit 헤더 이름이 다르므로 해당 API 문서를 확인합니다. 브라우저 JavaScript에서 비단순 응답 헤더를 읽으려면 서버의 `Access-Control-Expose-Headers` 설정도 필요합니다.
 
 ## 상태 저장: 쿠키, localStorage, sessionStorage
 
@@ -129,7 +129,7 @@ Set-Cookie: session_id=abc123; HttpOnly; Secure; SameSite=Strict
 Cookie: session_id=abc123
 ```
 
-**HttpOnly**: JavaScript에서 쿠키 접근 불가 (XSS 방어).
+**HttpOnly**: JavaScript가 쿠키 값을 읽지 못하게 한다. XSS에 의한 인증 요청 실행까지 막지는 않는다.
 **Secure**: HTTPS 연결에서만 전송.
 **SameSite=Strict**: 다른 사이트에서 온 요청에는 쿠키 미포함 (CSRF 방어).
 
@@ -165,7 +165,7 @@ https://myapp.com     ≠  https://api.myapp.com  (호스트 다름 → 다른 �
 
 ### Preflight 요청
 
-`Content-Type: application/json` 같은 커스텀 헤더가 있는 요청은 브라우저가 먼저 **OPTIONS 메서드** 로 예비 요청(preflight)을 보냅니다.
+`Content-Type: application/json`처럼 CORS의 단순 요청 조건을 벗어난 헤더 값이나 `Authorization` 헤더가 있는 교차 출처 요청은 브라우저가 먼저 **OPTIONS 메서드** 로 예비 요청(preflight)을 보냅니다.
 
 ```http
 OPTIONS /predict HTTP/1.1
@@ -191,7 +191,7 @@ app.add_middleware(
         "https://myapp.com",       # 프로덕션
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
 ```

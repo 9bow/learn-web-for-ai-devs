@@ -45,6 +45,9 @@ export default defineConfig({
     }),
     react(),
   ],
+  markdown: {
+    gfm: true,
+  },
   vite: {
     plugins: [tailwindcss()],
   },

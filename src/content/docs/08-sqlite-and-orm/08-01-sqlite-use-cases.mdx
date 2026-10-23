@@ -16,7 +16,10 @@ references:
     accessed: "2026-04-14"
   - title: "SQLite WAL 모드"
     url: "https://www.sqlite.org/wal.html"
-    accessed: "2026-04-14"
+    accessed: "2026-10-23"
+  - title: "SQLite Online Backup API"
+    url: "https://www.sqlite.org/backup.html"
+    accessed: "2026-10-23"
 ---
 
 ML 프로젝트를 시작할 때 PostgreSQL을 설치하고 설정하는 것은 번거롭다. SQLite는 파일 하나가 곧 데이터베이스다. 설치가 필요 없고, Python에 기본 내장되어 있다.
@@ -120,7 +123,7 @@ conn = sqlite3.connect(":memory:")
 
 ## WAL 모드
 
-기본 SQLite는 쓰기 시 파일 전체를 잠근다(exclusive lock). 읽기도 막힌다.
+기본 rollback journal 모드도 쓰기 트랜잭션 전체 동안 모든 읽기를 막는 것은 아니다. commit에 필요한 exclusive lock 단계에서 읽기가 대기할 수 있다.
 
 **WAL(Write-Ahead Logging) 모드**를 사용하면 읽기와 쓰기가 동시에 가능하다.
 
@@ -129,7 +132,7 @@ import sqlite3
 
 conn = sqlite3.connect("myapp.db")
 
-# WAL 모드 활성화 (연결할 때마다 설정)
+# WAL 모드는 DB에 지속된다. 앱 초기화 단계에서 활성화
 conn.execute("PRAGMA journal_mode=WAL")
 
 # 추가 성능 설정
@@ -142,15 +145,19 @@ WAL 모드의 동작:
 
 ```text
 기본 모드 (Journal):
-  쓰기 시 → 파일 전체 잠금 → 읽기 불가
+  쓰기 예약 중에는 읽기 가능, commit의 exclusive lock 단계는 읽기와 충돌
 
 WAL 모드:
   쓰기 → WAL 파일에 먼저 기록
-  읽기 → 원본 파일 + WAL 체크포인트로 일관된 뷰 제공
+  읽기 → 원본 DB와 WAL에서 해당 읽기 트랜잭션의 스냅샷 조회
   → 읽기/쓰기 동시 가능 (단, 쓰기는 여전히 직렬화)
 ```
 
 WAL 모드에서도 **쓰기는 직렬화된다.** 동시 쓰기 워커가 많다면 SQLite 한계다. 이 경우 PostgreSQL로 전환을 고려한다(08-04 참고).
+
+2026-10-23 공식 WAL 문서는 드문 동시 체크포인트·쓰기 상황의 WAL-reset 버그를 알린다. 3.51.3 이상 또는 수정이 backport된 3.50.7·3.44.6 등을 확인한다. Python 버전만 보지 말고 `sqlite3.sqlite_version`으로 실제 연결된 SQLite 라이브러리를 확인한다.
+
+살아 있는 DB의 `-wal`·`-shm` 파일을 수동 삭제하지 않는다. WAL은 아직 DB 본체에 반영하지 않은 데이터의 일부다. 백업에는 SQLite backup API나 `.backup`을 사용하고 복원을 검사한다.
 
 ## FastAPI에서 SQLite 사용
 
@@ -160,6 +167,13 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Depends
 
 DATABASE_URL = "experiments.db"
+
+# 아래 예제의 테이블 준비. 실제 운영은 마이그레이션으로 관리한다.
+with sqlite3.connect(DATABASE_URL) as initial:
+    initial.execute("CREATE TABLE IF NOT EXISTS experiments ("
+                    "id INTEGER PRIMARY KEY, name TEXT NOT NULL, accuracy REAL, "
+                    "created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+initial.close()
 
 @contextmanager
 def get_connection():
@@ -179,7 +193,7 @@ def get_connection():
 app = FastAPI()
 
 @app.post("/experiments")
-async def create_experiment(name: str, accuracy: float):
+def create_experiment(name: str, accuracy: float):
     with get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO experiments (name, accuracy) VALUES (?, ?)",
@@ -189,7 +203,7 @@ async def create_experiment(name: str, accuracy: float):
 
 
 @app.get("/experiments")
-async def list_experiments():
+def list_experiments():
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM experiments ORDER BY created_at DESC"
@@ -201,6 +215,6 @@ async def list_experiments():
 
 - **SQLite는 서버가 없는 단일 파일 DB다** — 설치 없이 Python 기본 내장으로 바로 사용 가능하다
 - **프로토타이핑, 로컬 실험 추적, 임베디드 환경에 최적이다** — 빠른 시작이 최우선일 때 선택한다
-- **동시 쓰기가 많으면 한계가 있다** — 기본 모드는 쓰기 시 전체 잠금이 발생한다
+- **동시 쓰기가 많으면 한계가 있다** — 기본 모드도 잠금 단계가 있으며 WAL에서도 writer는 하나다
 - **WAL 모드로 읽기/쓰기 동시성을 개선한다** — `PRAGMA journal_mode=WAL` 한 줄로 활성화한다
 - **쓰기 직렬화는 WAL에서도 유지된다** — 높은 동시 쓰기가 필요하면 PostgreSQL 전환을 고려한다

@@ -20,6 +20,12 @@ references:
   - title: "FastAPI: Server Workers"
     url: "https://fastapi.tiangolo.com/deployment/server-workers/"
     accessed: "2026-04-14"
+  - title: "Uvicorn Deployment"
+    url: "https://uvicorn.dev/deployment/"
+    accessed: "2026-10-23"
+  - title: "uvicorn-worker package"
+    url: "https://github.com/Kludex/uvicorn-worker"
+    accessed: "2026-10-23"
 ---
 
 ## 두 가지 서버의 역할
@@ -94,10 +100,10 @@ Python FastAPI 애플리케이션은 ASGI(Asynchronous Server Gateway Interface)
 |------|------|------|
 | 동기/비동기 | 동기만 | 동기 + 비동기 |
 | 대표 서버 | Gunicorn | Uvicorn |
-| 스트리밍 | 제한적 | 네이티브 지원 |
+| HTTP 스트리밍 | 동기 iterable로 가능 | 동기·비동기 처리 가능 |
 | WebSocket | 미지원 | 지원 |
 
-FastAPI는 비동기 프레임워크이므로 ASGI 서버인 Uvicorn이 필요합니다.
+FastAPI는 ASGI 앱이므로 Uvicorn·Hypercorn 같은 ASGI 서버가 필요합니다.
 
 ### Uvicorn 단독 실행
 
@@ -105,16 +111,17 @@ FastAPI는 비동기 프레임워크이므로 ASGI 서버인 Uvicorn이 필요�
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-개발 환경에서는 충분합니다. 하지만 단일 프로세스라 CPU 코어를 하나만 씁니다.
+위 명령은 한 워커를 실행합니다. Uvicorn은 프로덕션에서도 사용할 수 있으며 `--workers N`으로 다중 프로세스를 관리합니다. 동기 CPU 작업을 `async def`에 넣는다고 병렬 처리가 되지는 않습니다.
 
 ### Gunicorn + Uvicorn Worker 조합
 
-프로덕션에서는 Gunicorn이 프로세스 관리자 역할을 하고, Uvicorn이 각 워커 프로세스를 담당합니다.
+기존 Gunicorn 운영 환경에서는 별도 `uvicorn-worker` 패키지를 설치합니다. Uvicorn 내장 `uvicorn.workers` 모듈은 폐기 예정입니다.
 
 ```bash
+pip install gunicorn uvicorn-worker
 gunicorn app.main:app \
   --workers 4 \
-  --worker-class uvicorn.workers.UvicornWorker \
+  --worker-class uvicorn_worker.UvicornWorker \
   --bind 0.0.0.0:8000 \
   --timeout 120      # 모델 추론 시간 여유
 ```
@@ -127,21 +134,24 @@ Gunicorn (마스터 프로세스)
 └── Uvicorn Worker 4 (FastAPI 앱)
 ```
 
-워커 수 결정 공식은 `2 × CPU_코어 수 + 1`이 일반적입니다. 단, GPU 모델 추론의 경우 모든 워커가 GPU 메모리를 공유하므로 OOM 주의가 필요합니다.
+`2 × CPU_코어 수 + 1`을 ASGI·GPU 앱의 보편 공식으로 사용하지 않습니다. 워커 수별 처리량·p95 지연·모델 메모리를 측정합니다. 워커마다 모델을 로드하면 같은 GPU의 VRAM을 경쟁하므로 OOM이 발생할 수 있습니다.
 
 ### 모델 서빙 시 워커 설계
 
-```python
-# 각 워커마다 모델을 로드하면 GPU 메모리 낭비
-# 해결책 1: 워커 1개 + async로 동시성 처리
-gunicorn --workers 1 --worker-class uvicorn.workers.UvicornWorker
+```bash
+# 단일 웹 워커. 추론의 동시성·배치는 별도 정책으로 제한한다.
+gunicorn app.main:app --workers 1 --worker-class uvicorn_worker.UvicornWorker
+```
 
-# 해결책 2: 별도 모델 서버(Triton, TorchServe)에 위임
+다음은 별도 HTTP 추론 서버로 요청을 전달하는 발췌 예제입니다.
+
+```python
+# Triton이라면 HTTP API는 통상 8000, gRPC API는 통상 8001을 사용한다.
 @app.post("/predict")
 async def predict(request: PredictRequest):
     # 모델 서버에 HTTP 요청으로 위임
     async with httpx.AsyncClient() as client:
-        response = await client.post("http://triton:8001/infer", ...)
+        response = await client.post("http://model-server:8000/predict", ...)
     return response.json()
 ```
 
@@ -173,5 +183,5 @@ Uvicorn + FastAPI:
 - Web Server(nginx)는 정적 파일 서빙, SSL 종료, 라우팅을 담당한다. C로 작성되어 수만 동시 연결을 처리한다.
 - WAS(Uvicorn)는 FastAPI 애플리케이션을 실행해 동적 요청과 비즈니스 로직을 처리한다.
 - nginx의 버퍼링은 느린 클라이언트가 Uvicorn 프로세스를 점유하는 것을 방지한다.
-- FastAPI는 ASGI 프레임워크이므로 Uvicorn이 필요하다. 프로덕션에서는 Gunicorn이 Uvicorn 워커를 관리한다.
+- FastAPI는 ASGI 서버가 필요하다. Uvicorn의 내장 워커 관리 또는 Gunicorn과 별도 `uvicorn-worker` 패키지를 사용할 수 있다.
 - GPU 모델은 워커마다 별도 메모리를 사용하므로, 워커를 늘리면 메모리 사용량이 비례해서 늘어난다. 단일 워커 + 별도 모델 서버 구조를 고려하라.

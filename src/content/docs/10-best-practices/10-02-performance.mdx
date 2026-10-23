@@ -20,6 +20,12 @@ references:
   - title: "SQLAlchemy 성능 가이드"
     url: "https://docs.sqlalchemy.org/en/20/orm/queryguide/index.html"
     accessed: "2026-04-14"
+  - title: "SQLAlchemy AsyncSession Implicit I/O"
+    url: "https://docs.sqlalchemy.org/en/21/orm/extensions/asyncio.html#preventing-implicit-io-when-using-asyncsession"
+    accessed: "2026-10-23"
+  - title: "PyTorch torch.load"
+    url: "https://docs.pytorch.org/docs/2.14/generated/torch.load.html"
+    accessed: "2026-10-23"
 ---
 
 AI/ML 서비스의 성능 병목은 **세 곳**에서 발생한다: 백엔드 I/O 대기, 프론트엔드 번들 크기, ML 추론 오버헤드. 각각을 독립적으로 최적화해야 전체 사용자 경험이 개선된다.
@@ -28,13 +34,13 @@ AI/ML 서비스의 성능 병목은 **세 곳**에서 발생한다: 백엔드 I/
 
 ### async/await로 I/O 비차단
 
-FastAPI의 최대 장점은 비동기 처리다. 동기 함수로 작성하면 이 장점이 사라진다.
+동기 I/O를 사용하는 `def` 핸들러는 FastAPI가 스레드풀에서 실행한다. 이벤트 루프를 막는 경우는 `async def` 안에서 동기 I/O를 직접 호출할 때다. 비동기가 모든 워크로드에서 더 빠른 것은 아니다.
 
 ```python
-# 느린 코드 — 동기 DB 호출이 이벤트 루프를 블로킹
+# 잘못된 조합 — async def 내부의 동기 DB 호출
 @app.get("/api/todos")
-def get_todos(db: Session = Depends(get_sync_db)):
-    return db.query(Todo).all()  # 스레드 풀을 점유
+async def get_todos(db: Session = Depends(get_sync_db)):
+    return db.query(Todo).all()  # 이벤트 루프를 막음
 
 # 빠른 코드 — 비동기 DB 호출
 @app.get("/api/todos")
@@ -78,12 +84,12 @@ class Todo(Base):
 N+1 문제는 `selectinload`로 해결한다.
 
 ```python
-# N+1 문제 — 각 Todo마다 별도 쿼리로 tags를 로드
+# 잘못된 async 예제 — lazy relationship의 암묵적 I/O
 todos = await db.execute(select(Todo))
 for todo in todos.scalars():
-    print(todo.tags)  # 각 todo마다 SELECT 쿼리 발생!
+    print(todo.tags)  # AsyncSession에서는 MissingGreenlet 등 오류가 날 수 있음
 
-# 해결 — selectinload로 한 번에 로드
+# 해결 — selectinload로 관련 데이터를 추가 SELECT에 배치해 미리 로드
 from sqlalchemy.orm import selectinload
 
 result = await db.execute(
@@ -97,27 +103,30 @@ result = await db.execute(
 
 ```python
 from functools import lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 # 모델 로딩은 앱 시작 시 1회만 (섹션 ML 패턴 참고)
 @lru_cache(maxsize=1)
-def load_model():
+def load_model(path: str):
     import torch
-    return torch.load("model.pt")
+    model = Classifier()  # 학습 때 사용한 아키텍처를 앱에서 정의
+    model.load_state_dict(torch.load(path, weights_only=True, map_location="cpu"))
+    return model.eval()
 
 # API 응답 캐싱 (간단한 버전)
-_cache: dict[str, tuple[any, datetime]] = {}
+_cache: dict[str, tuple[Any, datetime]] = {}
 CACHE_TTL = timedelta(minutes=5)
 
 async def get_stats_cached(db: AsyncSession) -> dict:
     key = "global_stats"
     if key in _cache:
         value, expires_at = _cache[key]
-        if datetime.utcnow() < expires_at:
+        if datetime.now(timezone.utc) < expires_at:
             return value
 
     stats = await compute_stats(db)  # 무거운 집계 쿼리
-    _cache[key] = (stats, datetime.utcnow() + CACHE_TTL)
+    _cache[key] = (stats, datetime.now(timezone.utc) + CACHE_TTL)
     return stats
 ```
 
@@ -185,8 +194,9 @@ location /assets/ {
 ### lifespan으로 모델 1회 로딩
 
 ```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from contextlib import asynccontextmanager, suppress
+from fastapi import FastAPI, HTTPException
+import asyncio
 
 ml_model = {}
 
@@ -195,14 +205,19 @@ async def lifespan(app: FastAPI):
     # 앱 시작 시 1회 실행 — 모델 로딩
     ml_model["classifier"] = load_model("model.pt")
     ml_model["tokenizer"] = load_tokenizer("tokenizer/")
-    yield
-    # 앱 종료 시 정리
-    ml_model.clear()
+    worker = asyncio.create_task(process_batch())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+        ml_model.clear()
 
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/api/predict")
-async def predict(request: PredictRequest):
+def predict(request: PredictRequest):
     model = ml_model["classifier"]  # 이미 로드된 모델 재사용
     return {"result": model.predict(request.text)}
 ```
@@ -214,30 +229,43 @@ async def predict(request: PredictRequest):
 단일 요청을 기다리지 않고 짧은 시간 내 쌓인 요청을 묶어서 처리한다.
 
 ```python
-import asyncio
-from collections import deque
-
-batch_queue: deque = deque()
+# 위 lifespan에서 process_batch를 생성한다. 모델 adapter는 predict_batch를 제공한다.
+batch_queue: asyncio.Queue = asyncio.Queue(maxsize=128)
 BATCH_SIZE = 32
-BATCH_TIMEOUT = 0.05  # 50ms
+BATCH_TIMEOUT = 0.05
 
 async def process_batch():
     while True:
+        batch = [await batch_queue.get()]
         await asyncio.sleep(BATCH_TIMEOUT)
-        if batch_queue:
-            batch = [batch_queue.popleft() for _ in range(min(BATCH_SIZE, len(batch_queue)))]
-            inputs = [item["input"] for item in batch]
-            results = model.predict_batch(inputs)  # 배치 추론
+        while len(batch) < BATCH_SIZE and not batch_queue.empty():
+            batch.append(batch_queue.get_nowait())
+        try:
+            results = await asyncio.to_thread(
+                ml_model["classifier"].predict_batch,
+                [item["input"] for item in batch],
+            )
+            if len(results) != len(batch):
+                raise RuntimeError("배치 결과 수 불일치")
             for item, result in zip(batch, results):
-                item["future"].set_result(result)
+                if not item["future"].done():
+                    item["future"].set_result(result)
+        except Exception as error:
+            for item in batch:
+                if not item["future"].done():
+                    item["future"].set_exception(error)
 
-@app.post("/api/predict")
-async def predict(request: PredictRequest):
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
-    batch_queue.append({"input": request.text, "future": future})
+@app.post("/api/batch-predict")
+async def batch_predict(request: PredictRequest):
+    future = asyncio.get_running_loop().create_future()
+    try:
+        batch_queue.put_nowait({"input": request.text, "future": future})
+    except asyncio.QueueFull:
+        raise HTTPException(status_code=429, detail="추론 대기열이 가득 찼습니다")
     return {"result": await future}
 ```
+
+위는 한 프로세스의 bounded queue 데모이며 lifespan·모델 adapter와 함께 사용한다. 모델 로더·tokenizer·PredictRequest는 앱에서 준비한다. 종료 시 작업을 보존하지 않으며 GPU 취소·여러 프로세스의 배치 조정은 전용 추론 서버나 작업 큐에서 구현한다.
 
 GPU 배치는 처리량을 높일 수 있지만 대기열 때문에 지연 시간이 늘 수도 있다. 배치 크기와 대기 시간은 모델·GPU 메모리·SLO로 측정해 정한다.
 

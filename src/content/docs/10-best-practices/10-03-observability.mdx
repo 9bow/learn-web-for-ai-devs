@@ -23,6 +23,15 @@ references:
   - title: "OpenTelemetry Semantic Conventions"
     url: "https://opentelemetry.io/docs/specs/semconv/"
     accessed: "2026-08-28"
+  - title: "Prometheus Instrumentation Labels"
+    url: "https://prometheus.io/docs/practices/instrumentation/"
+    accessed: "2026-10-23"
+  - title: "Prometheus client_python Multiprocess"
+    url: "https://prometheus.github.io/client_python/multiprocess/"
+    accessed: "2026-10-23"
+  - title: "Jaeger 2.22 Getting Started"
+    url: "https://www.jaegertracing.io/docs/2.22/getting-started/"
+    accessed: "2026-10-23"
 ---
 
 프로덕션 서비스는 "왜 느려졌는가?", "어떤 사용자에게 에러가 났는가?", "ML 모델 정확도가 떨어졌는가?"를 빠르게 답할 수 있어야 한다. 이를 가능하게 하는 것이 **관측성(Observability)**의 세 기둥: 로그, 메트릭, 트레이싱이다. 서로 다른 서비스가 같은 이름과 attribute를 쓰려면 OpenTelemetry semantic conventions를 기준으로 삼는다.
@@ -44,6 +53,7 @@ references:
 ```python
 import structlog
 import logging
+import uuid
 
 # 설정 — 앱 시작 시 1회
 structlog.configure(
@@ -62,10 +72,11 @@ logger = structlog.get_logger()
 # 사용 예
 @app.post("/api/todos")
 async def create_todo(todo: TodoCreate, db: AsyncSession = Depends(get_db)):
+    request_id = uuid.uuid4().hex
     logger.info(
         "todo.create.start",
-        title=todo.title,
-        user_id=todo.user_id,
+        request_id=request_id,  # 앱에서 생성한 상관관계 ID
+        title_length=len(todo.title),
     )
     try:
         result = await create_todo_in_db(todo, db)
@@ -78,7 +89,7 @@ async def create_todo(todo: TodoCreate, db: AsyncSession = Depends(get_db)):
 
 출력 예:
 ```json
-{"timestamp": "2026-04-14T10:23:45Z", "level": "info", "event": "todo.create.start", "title": "논문 읽기", "user_id": 42}
+{"timestamp": "2026-04-14T10:23:45Z", "level": "info", "event": "todo.create.start", "request_id": "req_abc", "title_length": 5}
 {"timestamp": "2026-04-14T10:23:45Z", "level": "info", "event": "todo.create.success", "todo_id": 123}
 ```
 
@@ -96,7 +107,7 @@ async def create_todo(todo: TodoCreate, db: AsyncSession = Depends(get_db)):
 
 ```python
 from prometheus_client import Counter, Histogram, Gauge, make_asgi_app
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 # 메트릭 정의
 REQUEST_COUNT = Counter(
@@ -106,7 +117,7 @@ REQUEST_COUNT = Counter(
 )
 REQUEST_DURATION = Histogram(
     "http_request_duration_seconds",
-    "HTTP request duration",
+    "Time until response headers are available",
     ["method", "endpoint"],
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
 )
@@ -127,21 +138,21 @@ import time
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
-    duration = time.perf_counter() - start
-
-    REQUEST_COUNT.labels(
-        method=request.method,
-        endpoint=request.url.path,
-        status_code=response.status_code
-    ).inc()
-    REQUEST_DURATION.labels(
-        method=request.method,
-        endpoint=request.url.path
-    ).observe(duration)
-
-    return response
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        endpoint = getattr(route, "path", "__unmatched__")
+        REQUEST_COUNT.labels(request.method, endpoint, str(status_code)).inc()
+        REQUEST_DURATION.labels(request.method, endpoint).observe(
+            time.perf_counter() - start
+        )
 ```
+
+label에는 실제 `/todos/123` 대신 `/todos/{todo_id}` 같은 route template을 쓴다. 사용자 ID·원문·무한한 URL을 넣으면 시계열 수가 계속 늘어난다. 위 middleware 시간은 스트림 전체 소비 시간이 아니라 응답 헤더 준비까지의 시간이다. 스트림 완료·첫 토큰 시간은 별도로 계측한다. 여러 프로세스에서는 client_python의 multiprocess 모드 또는 프로세스별 수집을 구성해야 한다.
 
 ML 추론 시간 측정:
 ```python
@@ -189,7 +200,7 @@ async def predict(request: PredictRequest):
         span.set_attribute("model.name", "classifier")
         span.set_attribute("input.length", len(request.text))
         result = model.predict(request.text)
-        span.set_attribute("prediction", result)
+        span.set_attribute("app.prediction.completed", True)
     return {"result": result}
 ```
 
@@ -232,7 +243,7 @@ services:
       - prometheus
 
   jaeger:
-    image: jaegertracing/all-in-one
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
     ports:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC
@@ -247,6 +258,8 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 15s
 ```
+
+이 Jaeger all-in-one 구성은 로컬 관찰용이며 trace 저장소는 메모리다. 운영에서는 저장소·보존 기간·접근 권한·포트 노출과 버전을 별도로 고정한다.
 
 ## 핵심 정리
 

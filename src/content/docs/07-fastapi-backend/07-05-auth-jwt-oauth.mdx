@@ -20,6 +20,9 @@ references:
   - title: "RFC 8725: JSON Web Token Best Current Practices"
     url: "https://datatracker.ietf.org/doc/html/rfc8725"
     accessed: "2026-08-28"
+  - title: "FastAPI OAuth2 JWT and Password Hashing"
+    url: "https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/"
+    accessed: "2026-10-23"
 ---
 
 AI 서비스를 외부에 공개할 때 반드시 인증(Authentication: 누구인가)과 인가(Authorization: 무엇을 할 수 있는가)가 필요하다. FastAPI는 이를 위한 여러 도구를 기본 제공한다.
@@ -66,46 +69,55 @@ eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9   ← Header
 
 ## FastAPI JWT 구현
 
+현재 FastAPI 튜토리얼의 PyJWT·pwdlib(Argon2) 조합을 사용한다. 아래 password grant 로그인은 로컬 학습용이다. RFC 9700은 resource owner password credentials grant를 사용하지 말도록 규정하므로 실제 OAuth/OIDC 로그인은 다음 절의 Authorization Code + PKCE로 구현한다.
+
 ```bash
-pip install python-jose[cryptography] passlib[bcrypt] python-multipart
+pip install PyJWT "pwdlib[argon2]" python-multipart
 ```
 
 ```python
 # auth.py
 import os
-from datetime import datetime, timedelta
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+from datetime import datetime, timedelta, timezone
+import jwt
+from jwt.exceptions import InvalidTokenError
+from pwdlib import PasswordHash
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 SECRET_KEY = os.environ["JWT_SECRET"]
 ALGORITHM = "HS256"
+ISSUER = "https://auth.example.com"
+AUDIENCE = "inference-api"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return password_hash.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return password_hash.hash(password)
 
 
 def create_access_token(data: dict) -> str:
     payload = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload.update({"exp": expire})
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload.update({"exp": expire, "iss": ISSUER, "aud": AUDIENCE})
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+        return jwt.decode(
+            token, SECRET_KEY, algorithms=[ALGORITHM],
+            issuer=ISSUER, audience=AUDIENCE,
+            options={"require": ["exp", "sub", "iss", "aud"]},
+        )
+    except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="토큰이 유효하지 않습니다",
@@ -115,7 +127,9 @@ def decode_token(token: str) -> dict:
 
 ```python
 # main.py
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
+from auth import (oauth2_scheme, get_password_hash, verify_password,
+                  create_access_token, decode_token)
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
@@ -155,7 +169,10 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     username = payload.get("sub")
     if not username:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
-    return {"username": username, "role": payload.get("role")}
+    user = FAKE_USERS_DB.get(username)
+    if user is None:
+        raise HTTPException(status_code=401, detail="유효하지 않은 사용자")
+    return {"username": username, "role": user["role"]}
 
 
 @app.get("/me")
@@ -224,20 +241,20 @@ curl -X POST https://api.example.com/v1/completions \
 비밀번호를 평문으로 저장하는 것은 절대 금지다. 새 시스템은 메모리-하드 password hashing 방식을 우선 검토하고, 기존 환경과의 호환이 필요할 때 bcrypt를 사용할 수 있다. 어떤 방식을 쓰든 라이브러리의 현재 권고, 적절한 cost, 재해시 정책을 운영 환경에서 검토한다.
 
 ```python
-from passlib.context import CryptContext
+from pwdlib import PasswordHash
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+password_hash = PasswordHash.recommended()
 
 # 회원가입 시
-hashed = pwd_context.hash("user-password")
-# '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW'
+hashed = password_hash.hash("user-password")
+# Argon2id 해시. salt와 매개변수도 인코딩된다.
 
 # 로그인 시
-is_valid = pwd_context.verify("user-password", hashed)  # True
-is_invalid = pwd_context.verify("wrong-password", hashed)  # False
+is_valid = password_hash.verify("user-password", hashed)  # True
+is_invalid = password_hash.verify("wrong-password", hashed)  # False
 ```
 
-`$2b$12$` 에서 `12`는 cost factor다. 값이 클수록 느리고 안전하다. 기본값 12는 일반적으로 적절하다.
+실행 환경에서 메모리·시간 비용을 측정하고 로그인 시 재해시 정책을 적용한다. 기존 bcrypt 해시는 호환 요구에 따라 검증·이전한다. JWT secret은 충분히 긴 난수로 생성하고, issuer·audience는 서비스 계약에 맞게 바꾼다.
 
 ## 핵심 정리
 

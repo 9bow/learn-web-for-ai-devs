@@ -26,6 +26,12 @@ references:
   - title: "WHATWG Streams Standard"
     url: "https://streams.spec.whatwg.org/"
     accessed: "2026-08-28"
+  - title: "Transformers AsyncTextIteratorStreamer"
+    url: "https://huggingface.co/docs/transformers/internal/generation_utils#transformers.AsyncTextIteratorStreamer"
+    accessed: "2026-10-23"
+  - title: "OpenAI Streaming Responses"
+    url: "https://developers.openai.com/api/docs/guides/streaming-responses"
+    accessed: "2026-10-23"
 ---
 
 LLM API에서 긴 응답의 대기 시간을 줄이고 싶다면 스트리밍이 유용하다. 다만 모든 요청에 반드시 필요한 것은 아니다. 짧은 결과, 배치 작업, 감사가 먼저 필요한 작업은 일반 응답이나 비동기 작업으로 처리할 수 있다. 이 챕터에서는 주요 API의 스트림 포맷을 분석하고, 직접 모델을 서빙할 때의 구현 패턴을 다룬다.
@@ -59,6 +65,18 @@ data: [DONE]
 ```
 
 각 이벤트는 `data:` 하나에 JSON 객체다. `choices[0].delta.content`에 토큰이 담긴다. 스트림 종료는 `data: [DONE]`으로 신호한다.
+
+Responses API는 다음처럼 이름 있는 이벤트를 보낸다. `response.output_text.delta`의 `delta`를 누적하고, `response.completed`·`response.failed`·`response.incomplete`를 구분한다. Chat Completions의 `[DONE]`을 모든 API의 종료 규칙으로 사용하지 않는다.
+
+```text
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"안녕"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_...","status":"completed"}}
+```
+
+위는 이벤트의 관련 필드만 표시한 발췌다. 네트워크 청크 하나가 토큰 하나라는 보장은 없고, 델타가 텍스트 이외의 도구 인자일 수도 있다.
 
 ## Anthropic SSE 포맷 분석
 
@@ -94,12 +112,11 @@ OpenAI와 달리 `event:` 필드로 이벤트 유형을 구분하고, 각 단계
 ## FastAPI + HuggingFace 스트리밍 구현
 
 ```python
-import asyncio
 import json
 from threading import Thread
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AsyncTextIteratorStreamer
 
 app = FastAPI()
 
@@ -110,10 +127,11 @@ model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
 
 async def generate_tokens(prompt: str):
     """HuggingFace 모델에서 토큰을 SSE 포맷으로 yield한다."""
-    streamer = TextIteratorStreamer(
+    streamer = AsyncTextIteratorStreamer(
         tokenizer,
         skip_prompt=True,
         skip_special_tokens=True,
+        timeout=30.0,
     )
 
     inputs = tokenizer(prompt, return_tensors="pt")
@@ -130,10 +148,9 @@ async def generate_tokens(prompt: str):
     thread.start()
 
     # streamer에서 토큰을 읽어 SSE 포맷으로 변환
-    for token in streamer:
+    async for token in streamer:
         payload = json.dumps({"token": token}, ensure_ascii=False)
         yield f"data: {payload}\n\n"
-        await asyncio.sleep(0)  # 이벤트 루프에 제어권 반환
 
     yield "data: [DONE]\n\n"
 
@@ -150,14 +167,14 @@ async def generate_endpoint(body: dict):
     )
 ```
 
-`TextIteratorStreamer`는 HuggingFace가 스트리밍을 위해 제공하는 클래스다. 모델 생성을 별도 스레드에서 실행하고 메인 스레드에서 토큰을 이터레이션한다. `await asyncio.sleep(0)`으로 FastAPI 이벤트 루프가 다른 요청도 처리할 수 있게 제어권을 돌려준다.
+`AsyncTextIteratorStreamer`는 coroutine 안에서 생성하고 `async for`로 소비한다. 동기 `TextIteratorStreamer`를 이벤트 루프에서 `for`로 소비하면 큐 대기가 다른 요청을 막을 수 있다. 뒤에 `sleep(0)`을 붙여도 앞선 블로킹 대기는 없어지지 않는다. 위 예제의 모델은 기존 체크포인트를 사용하는 학습용이며, 실제 배포에서는 lifespan 로딩·동시 생성 제한·협력적 취소·타임아웃 후 worker 정리를 추가한다.
 
 ## React 클라이언트 구현
 
 `EventSource`는 GET만 지원하므로, POST 바디로 프롬프트를 보내야 할 때는 `fetch` API로 스트림을 직접 읽는다.
 
 ```typescript
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface StreamState {
   text: string;
@@ -168,24 +185,28 @@ function useLLMStream() {
   const [state, setState] = useState<StreamState>({ text: "", isStreaming: false });
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const startStream = async (prompt: string) => {
     // 이전 스트림이 있으면 취소
     abortRef.current?.abort();
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setState({ text: "", isStreaming: true });
 
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const response = await fetch("/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),
-        signal: abortRef.current.signal,
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) throw new Error("스트림을 시작할 수 없습니다.");
 
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -204,7 +225,7 @@ function useLLMStream() {
             .map((line) => line.slice(5).trimStart())
             .join("\n");
 
-          if (!data) continue;
+          if (!data || abortRef.current !== controller) continue;
           if (data === "[DONE]") return;
 
           const { token } = JSON.parse(data);
@@ -216,7 +237,14 @@ function useLLMStream() {
         console.error("스트리밍 오류:", error);
       }
     } finally {
-      setState((prev) => ({ ...prev, isStreaming: false }));
+      if (reader) {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      if (abortRef.current === controller) {
+        setState((prev) => ({ ...prev, isStreaming: false }));
+        abortRef.current = null;
+      }
     }
   };
 
@@ -227,6 +255,8 @@ function useLLMStream() {
   return { ...state, startStream, cancelStream };
 }
 ```
+
+이 파서는 위 서버의 LF 줄바꿈과 `{token}`·`[DONE]` 계약을 위한 예제다. 범용 SSE 클라이언트는 CRLF·CR 구분, `event`·`id`·`retry`와 명시적 오류 이벤트도 처리해야 한다. `getReader()`로 얻은 reader는 사용이 끝나면 취소·lock 해제를 수행하고, 컴포넌트 언마운트 시 요청을 취소한다. SDK 스트림 API 또는 검증한 SSE 파서를 쓰면 제공자별 계약을 분리할 수 있다.
 
 ## 취소와 Backpressure
 
@@ -252,7 +282,7 @@ worker가 지원할 때만 생성 중단 및 자원 회수
 
 ```text
 해결 방법:
-1. 토큰을 큐 대신 스트리머에서 직접 yield (메모리 효율)
+1. 스트리머도 내부 큐를 사용할 수 있으므로 최대 버퍼·생성 길이 제한
 2. 클라이언트 연결 끊김 즉시 생성 중단
 3. 서버 측 최대 버퍼 크기 제한
 ```
@@ -278,7 +308,7 @@ async def generate_tokens_safe(prompt: str):
 
 - OpenAI의 새 프로젝트는 Responses API를 우선 검토하고, Chat Completions 호환 스트림에서는 `data: {...}` + `data: [DONE]` 패턴을 이해한다
 - Anthropic은 `event:` 타입으로 메시지 시작, 델타, 종료 단계를 구분한다
-- HuggingFace `TextIteratorStreamer`와 별도 스레드로 동기 모델 추론을 비동기 스트림으로 변환한다
+- HuggingFace `AsyncTextIteratorStreamer`와 별도 스레드로 동기 모델 추론을 비동기 스트림으로 변환한다
 - 브라우저에서 POST + 스트림은 `fetch` API로 `response.body.getReader()`를 사용하고, 네트워크 청크 경계를 넘는 SSE 이벤트를 버퍼링해 파싱한다
 - `AbortController`는 브라우저 연결을 취소한다. 모델 생성 중단은 서버와 worker가 협력적으로 구현해야 한다
 - 스트림 중간 오류는 HTTP 상태 코드 대신 `event: error` SSE 이벤트로 전달한다

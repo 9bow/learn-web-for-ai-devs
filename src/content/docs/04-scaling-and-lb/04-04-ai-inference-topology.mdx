@@ -20,6 +20,12 @@ references:
   - title: "Celery — Distributed Task Queue"
     url: "https://docs.celeryq.dev/en/stable/getting-started/introduction.html"
     accessed: "2026-04-14"
+  - title: "Route 53 Routing to CloudFront"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-to-cloudfront-distribution.html"
+    accessed: "2026-10-23"
+  - title: "ALB Target Groups"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html"
+    accessed: "2026-10-23"
 ---
 
 ## 전체 아키텍처 토폴로지
@@ -30,13 +36,8 @@ references:
 ┌─────────────────────────────────────────────────────────┐
 │                        사용자                           │
 └───────────────────────────┬─────────────────────────────┘
-                            │ HTTPS
-                            ▼
-┌─────────────────────────────────────────────────────────┐
-│                    DNS (Route 53)                        │
-│          example.com → ALB 도메인 CNAME                 │
-└───────────────────────────┬─────────────────────────────┘
-                            │
+                            │ 사전 DNS 조회로 CDN 주소 확인
+                            │ HTTPS (DNS 서버를 경유하지 않음)
                             ▼
 ┌─────────────────────────────────────────────────────────┐
 │             CDN (CloudFront / Cloudflare)                │
@@ -89,7 +90,7 @@ references:
 
 ### DNS와 CDN
 
-DNS(Route 53)는 도메인을 ALB의 DNS 이름으로 연결합니다. ALB IP는 동적으로 바뀔 수 있으므로 IP가 아닌 ALB DNS 이름으로 CNAME을 설정합니다.
+DNS는 접속할 호스트 이름을 해석하며 HTTP 요청이 통과하는 프록시가 아닙니다. CDN을 앞에 둔 예제에서는 사용자 도메인을 CDN으로 연결하고 CDN의 오리진을 ALB로 지정합니다. Route 53의 zone apex에는 일반 CNAME 대신 지원 대상에 대한 alias 레코드를 사용할 수 있습니다.
 
 CDN(CloudFront)은 전 세계 엣지 서버에 정적 에셋을 캐싱합니다. 서울 사용자는 서울 엣지에서 JS/CSS를 받습니다. 미국 원본 서버까지 왕복하지 않아도 됩니다. `/api/*` 요청은 CDN이 캐싱하지 않고 ALB로 통과시킵니다.
 
@@ -100,7 +101,8 @@ ALB는 L7 로드밸런서입니다. SSL 인증서를 여기서 관리합니다. 
 ```text
 ALB 라우팅 규칙 예시:
   Host: example.com, Path: /api/* → FastAPI 타겟 그룹
-  Host: example.com, Path: /*    → 정적 파일 타겟 그룹 (또는 S3)
+  Host: example.com, Path: /*    → 지원되는 정적 서버 타겟 그룹
+  S3 정적 오리진은 CDN에서 분기 (ALB의 직접 target type이 아님)
 ```
 
 ### FastAPI 워커 (CPU 인스턴스)
@@ -109,7 +111,7 @@ ALB 라우팅 규칙 예시:
 
 ```python
 @app.post("/api/inference")
-async def run_inference(request: InferenceRequest, background_tasks: BackgroundTasks):
+async def run_inference(request: InferenceRequest):
     if request.estimated_seconds < 10:
         # 짧은 추론: 동기 처리
         result = await gpu_worker_client.infer(request)
@@ -137,15 +139,15 @@ GPU 인스턴스는 비쌉니다. 항상 최대 수를 켜두면 비용이 폭�
   > 10개  → GPU 워커 +1 (스케일 아웃)
   < 2개   → GPU 워커 -1 (스케일 인, 최소 1대 유지)
 
-GPU 인스턴스 시작 시간: ~3분 (AMI에 모델 미리 로드)
+GPU 준비 시간: 인스턴스 확보·드라이버·모델 로딩 시간을 실제 측정
   → 시작 후 큐에서 작업 폴링 시작
 
 스팟 인스턴스 활용:
   - On-Demand 1대 (최소 보장)
-  - Spot 나머지 (비용 70% 절감, 중단 가능성 처리 필요)
+  - Spot 혼합 여부는 실제 가격·용량·중단 처리 비용으로 결정
 ```
 
-모델 가중치 로딩 시간을 줄이려면 GPU 인스턴스용 커스텀 AMI에 모델을 미리 포함시킵니다. 인스턴스 시작 시 모델 다운로드가 필요 없어 준비 시간이 수분에서 수십 초로 줄어듭니다.
+모델 가중치 로딩 시간을 줄이려면 GPU 인스턴스용 커스텀 AMI에 모델을 미리 포함시킵니다. 인스턴스 시작 시 모델 다운로드가 필요 없어 다운로드 시간을 줄일 수 있습니다. GPU 메모리 로딩·초기화 시간까지 없어지지는 않습니다.
 
 ### 데이터 계층
 
@@ -170,7 +172,7 @@ VectorDB (pgvector 또는 Pinecone):
 
 ## 장시간 추론을 위한 큐 패턴
 
-HTTP 요청은 일반적으로 30~60초 타임아웃이 있습니다. LLM 응답 생성, 이미지 생성, 영상 처리처럼 수분이 걸리는 작업은 동기 HTTP로 처리할 수 없습니다.
+HTTP 자체에 30~60초의 일괄 제한은 없습니다. 브라우저·CDN·로드밸런서·프록시·앱의 유휴 및 전체 제한을 확인해야 합니다. 장시간 작업을 연결 수명과 분리하고 재시도·복구하려면 지속성 있는 큐가 유용합니다.
 
 ```text
 [큐 패턴 흐름]
@@ -183,12 +185,12 @@ HTTP 요청은 일반적으로 30~60초 타임아웃이 있습니다. LLM 응답
 클라이언트 ← SSE stream ← 작업 완료 이벤트
 ```
 
-폴링보다 SSE(Server-Sent Events)나 WebSocket이 실시간성이 좋지만, 구현 복잡도가 높습니다. 실제 서비스에서는 추론 시간이 5초 이내면 동기, 그 이상이면 큐 패턴을 사용하는 혼합 전략이 현실적입니다.
+폴링보다 SSE(Server-Sent Events)나 WebSocket이 실시간성이 좋지만, 구현 복잡도가 높습니다. 몇 초라는 고정 기준 대신 사용자 대기 허용 시간, 중간 결과 필요성, 연결 제한, 작업 복구 요구로 동기 응답·스트리밍·큐를 선택합니다.
 
 ## 핵심 정리
 
-- AI 추론 서비스의 요청 흐름은 DNS → CDN → ALB → nginx/FastAPI 워커 → GPU 워커 → DB/Redis/VectorDB 순이다.
+- DNS 이름 해석 후 HTTPS 요청은 CDN → ALB → nginx/FastAPI → GPU 워커 등으로 흐른다. DNS 서버는 HTTP 프록시가 아니다.
 - CDN은 정적 에셋을 엣지에서 서빙하고, ALB는 FastAPI 워커들에 L7 로드밸런싱과 SSL 종료를 담당한다.
-- GPU 워커는 큐(Redis/SQS) 대기 메시지 수를 기반으로 오토스케일링한다. 스팟 인스턴스로 비용을 70% 절감할 수 있다.
-- 장시간 추론(수분)은 동기 HTTP로 처리할 수 없다. 큐에 작업을 넣고 `job_id`를 반환한 뒤 클라이언트가 폴링하거나 SSE로 완료를 수신한다.
+- GPU 워커는 큐(Redis/SQS) 대기 메시지 수를 기반으로 오토스케일링한다. 스팟 비용과 중단 복구 비용은 실제 조건으로 계산한다.
+- 장시간 추론은 각 홉의 연결 제한과 작업 복구 요구를 검토한다. 큐에 작업을 넣고 `job_id`를 반환한 뒤 클라이언트가 폴링하거나 SSE로 완료를 수신한다.
 - 데이터 계층은 역할별로 분리된다. 구조화 데이터는 PostgreSQL, 세션·캐시·큐는 Redis, 임베딩 검색은 VectorDB가 담당한다.

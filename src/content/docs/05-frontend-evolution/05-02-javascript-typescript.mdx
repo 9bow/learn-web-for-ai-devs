@@ -17,11 +17,14 @@ references:
   - title: "TypeScript - Why TypeScript?"
     url: "https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html"
     accessed: "2026-04-14"
+  - title: "Vite TypeScript"
+    url: "https://vite.dev/guide/features.html#typescript"
+    accessed: "2026-10-23"
 ---
 
 ## JavaScript의 유연함, 그리고 그 대가
 
-JavaScript는 브라우저에서 동작하는 유일한 언어다. 1995년 Netscape가 10일 만에 설계한 이 언어는 "누구나 빠르게 배울 수 있는 스크립트"를 목표로 했다. 동적 타이핑은 그 철학의 산물이다.
+JavaScript는 브라우저의 웹 API와 UI를 제어하는 표준 언어다. WebAssembly도 브라우저에서 실행되므로 유일한 실행 언어라는 뜻은 아니다. 1995년 Netscape가 10일 만에 설계한 이 언어는 "누구나 빠르게 배울 수 있는 스크립트"를 목표로 했다. 동적 타이핑은 그 철학의 산물이다.
 
 ```javascript
 // JavaScript — 문제없이 실행된다
@@ -138,7 +141,7 @@ ML 엔지니어에게는 Python type hints가 가장 유사한 개념이다.
 | 특성 | Python type hints | TypeScript |
 |------|-------------------|------------|
 | 도입 시점 | Python 3.5+ (선택적) | 언어 설계의 핵심 |
-| 런타임 강제 | 기본적으로 없음 (mypy 별도 실행) | tsc 컴파일 시 강제 |
+| 런타임 강제 | 기본적으로 없음 (mypy 등으로 정적 검사) | 없음 (tsc는 실행 전 정적 검사) |
 | IDE 지원 | Pylance/mypy 기반 | 네이티브 수준 |
 | 타입 추론 | 제한적 | 매우 강력 |
 | 생태계 표준화 | 아직 선택적 | 대부분 프로젝트가 TS |
@@ -166,12 +169,12 @@ function processBatch(
 
 ## 실제 프로젝트에서 TS 도입 효과
 
-Airbnb, Microsoft, Google 등 대형 팀들이 TypeScript를 채택한 이유는 측정 가능한 효과가 있었기 때문이다.
+TypeScript는 타입 정보와 도구 지원으로 다음 작업을 도울 수 있다. 효과는 프로젝트와 검사 설정에 따라 달라진다.
 
 - **리팩토링 자신감**: IDE가 모든 사용처를 찾아 안전하게 변경
 - **온보딩 속도**: 새 팀원이 함수 시그니처만 봐도 사용법을 파악
-- **런타임 오류 감소**: Airbnb 보고서 기준 버그의 38%가 TS로 사전 방지 가능
-- **자동완성 품질**: 서버 응답 타입을 정의하면 프론트에서 100% 자동완성
+- **오류 조기 발견**: 타입이 맞지 않는 호출을 실행 전에 발견
+- **자동완성 품질**: 선언된 응답 타입을 바탕으로 도구가 사용 가능한 필드를 제안
 
 ## TypeScript 컴파일 과정
 
@@ -183,11 +186,11 @@ npx tsc src/index.ts
 npm run build
 ```
 
-TypeScript는 브라우저에서 직접 실행되지 않는다. 항상 JavaScript로 트랜스파일된다. 이 과정에서 타입 정보는 제거되고, 런타임에는 일반 JavaScript로 동작한다.
+브라우저용 TypeScript는 JavaScript로 변환되고 타입 정보는 제거된다. Vite의 변환만으로 타입 검사가 수행되는 것은 아니므로 `tsc --noEmit` 또는 템플릿의 타입 검사 명령도 실행한다. `response.json() as MyType`는 형식을 검사하지 않으므로 외부 JSON은 런타임 검증이 별도로 필요하다.
 
 ## 핵심 정리
 
 - JavaScript의 동적 타이핑은 소규모에서는 편리하지만, 대규모 코드베이스에서 리팩토링 안전성과 IDE 지원을 취약하게 만든다
 - TypeScript는 컴파일 타임에 타입 오류를 잡아 런타임 오류를 예방하고, IDE 자동완성과 리팩토링 도구를 강력하게 만든다
 - Python의 type hints와 개념적으로 유사하지만, TS는 컴파일 강제와 타입 추론이 훨씬 강력하다
-- 오늘날 프론트엔드 프로젝트의 대부분은 TypeScript를 기본으로 사용하며, 새 프로젝트에서 JavaScript를 선택할 이유는 거의 없다
+- 팀의 규모·도구·검증 요구로 TypeScript 도입을 결정하고, 외부 입력의 런타임 검증은 별도로 수행한다

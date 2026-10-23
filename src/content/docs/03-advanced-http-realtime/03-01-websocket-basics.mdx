@@ -20,13 +20,19 @@ references:
   - title: "nginx WebSocket proxying"
     url: "https://nginx.org/en/docs/http/websocket.html"
     accessed: "2026-04-14"
+  - title: "RFC 8441: Bootstrapping WebSockets with HTTP/2"
+    url: "https://datatracker.ietf.org/doc/html/rfc8441"
+    accessed: "2026-10-23"
+  - title: "RFC 9220: Bootstrapping WebSockets with HTTP/3"
+    url: "https://datatracker.ietf.org/doc/html/rfc9220"
+    accessed: "2026-10-23"
 ---
 
 HTTP는 클라이언트가 요청하고 서버가 응답하는 단방향 모델이다. 채팅, 실시간 협업, 주식 호가처럼 서버가 먼저 데이터를 밀어야 하는 상황에서는 이 모델이 맞지 않는다. WebSocket은 이 문제를 TCP 연결을 재사용하는 양방향 채널로 해결한다.
 
-## HTTP Upgrade 핸드셰이크
+## HTTP/1.1 Upgrade 핸드셰이크
 
-WebSocket은 HTTP 위에서 시작된다. 클라이언트가 먼저 평범한 HTTP GET 요청을 보내되, 특별한 헤더를 포함한다.
+아래는 RFC 6455의 HTTP/1.1 핸드셰이크다. HTTP/2·3에서는 지원하는 종단점이 확장 CONNECT를 사용할 수 있으므로 모든 WebSocket 연결이 101 응답을 쓰는 것은 아니다. 클라이언트가 먼저 평범한 HTTP GET 요청을 보내되, 특별한 헤더를 포함한다.
 
 ```http
 GET /ws HTTP/1.1
@@ -46,7 +52,7 @@ Connection: Upgrade
 Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 ```
 
-`Sec-WebSocket-Accept` 값은 클라이언트가 보낸 키에 고정 GUID를 붙여 SHA-1 해시한 결과다. 이 과정은 캐싱 프록시가 실수로 WebSocket 트래픽을 가로채지 못하게 막기 위한 보안 장치다. 이후 TCP 연결은 HTTP가 아닌 WebSocket 프레임을 주고받는 채널로 전환된다.
+`Sec-WebSocket-Accept` 값은 클라이언트가 보낸 키에 고정 GUID를 붙여 SHA-1 해시한 결과다. 이는 서버가 WebSocket 핸드셰이크를 이해한다는 확인 값이며, 사용자 인증이나 암호화가 아니다. 마스킹 역시 암호화가 아니므로 기밀성에는 TLS가 필요하다. 이후 TCP 연결은 HTTP가 아닌 WebSocket 프레임을 주고받는 채널로 전환된다.
 
 ## 프레임 구조
 
@@ -132,7 +138,7 @@ ws.addEventListener("close", (event) => {
 
 ## nginx 리버스 프록시 설정
 
-HTTP/1.1 이상 및 `Upgrade` 헤더 전달이 필요하다. nginx 기본값은 HTTP/1.0이므로 명시적으로 지정해야 한다.
+아래는 HTTP/1.1 Upgrade로 백엔드에 전달하는 설정이다. nginx 버전에 따른 기본값에 기대지 않고 프록시 HTTP 버전과 hop-by-hop 헤더 전달을 명시한다.
 
 ```nginx
 location /ws {
@@ -147,9 +153,11 @@ location /ws {
 
 `proxy_read_timeout`을 늘리지 않으면 nginx가 유휴 연결을 60초 뒤에 끊는다. AI 추론처럼 응답이 느린 서비스에서 특히 중요하다.
 
+브라우저 WebSocket은 일반 fetch의 CORS 검사와 같은 방식으로 보호되지 않는다. 서버에서 `Origin` 허용 목록, 인증, 연결별 인가와 메시지 크기·빈도 제한을 적용한다. 에코 예제는 인증을 생략한 로컬 학습용이다. 연결 재개 시 이력은 별도 저장해야 한다.
+
 ## 핵심 정리
 
-- WebSocket은 HTTP `101 Switching Protocols`로 시작해 TCP 연결을 양방향 채널로 전환한다
+- HTTP/1.1 WebSocket은 `101 Switching Protocols`로 시작한다. 인증과 메시지 인가는 서버가 별도로 수행한다
 - 프레임은 opcode로 데이터 타입을 구분하며, 클라이언트 발신 프레임은 반드시 마스킹된다
 - FastAPI는 `@app.websocket()` 데코레이터로 WebSocket 엔드포인트를 간단히 정의한다
 - nginx 프록시 시 `proxy_http_version 1.1`과 `Upgrade` 헤더 전달이 필수다

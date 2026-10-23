@@ -20,6 +20,15 @@ references:
   - title: "SQLAlchemy PostgreSQL 방언"
     url: "https://docs.sqlalchemy.org/en/20/dialects/postgresql.html"
     accessed: "2026-04-14"
+  - title: "SQLite Appropriate Uses"
+    url: "https://www.sqlite.org/whentouse.html"
+    accessed: "2026-10-23"
+  - title: "SQLite FTS5"
+    url: "https://www.sqlite.org/fts5.html"
+    accessed: "2026-10-23"
+  - title: "SQLite JSON Functions"
+    url: "https://www.sqlite.org/json1.html"
+    accessed: "2026-10-23"
 ---
 
 SQLite로 빠르게 시작했다면 언제 PostgreSQL로 넘어가야 할까? 너무 일찍 전환하면 불필요한 복잡도를 추가하고, 너무 늦으면 데이터 손실이나 장애가 발생할 수 있다.
@@ -32,17 +41,17 @@ SQLite로 빠르게 시작했다면 언제 PostgreSQL로 넘어가야 할까? �
 신호 1: "database is locked" 에러가 자주 발생한다
   → 여러 FastAPI 워커 또는 백그라운드 작업이 동시에 쓰기를 시도 중
 
-신호 2: 데이터 파일이 수 GB를 넘어간다
-  → SQLite는 파일 크기 제한이 없지만 성능이 저하됨
+신호 2: 실제 쿼리 지연·백업·복구 요구가 현재 구성의 한계를 넘는다
+  → 파일 크기만으로 판단하지 않는다. SQLite에도 빌드·페이지 크기별 크기 제한이 있다
 
 신호 3: 여러 서버가 같은 DB에 접근해야 한다
   → SQLite는 단일 파일이므로 네트워크 공유 불안정
 
-신호 4: 전문 검색(Full-text Search)이 필요하다
-  → PostgreSQL의 tsvector/GIN 인덱스가 훨씬 강력
+신호 4: PostgreSQL 검색 기능·운영 체계가 요구에 더 적합하다
+  → SQLite도 FTS5를 제공하므로 전문 검색 자체가 없는 것은 아니다
 
 신호 5: 벡터 유사도 검색이 필요하다 (RAG, 임베딩 검색)
-  → pgvector 확장이 필요 (SQLite에는 없음)
+  → pgvector의 기능·운영 특성이 필요하다면 고려. SQLite도 별도 벡터 확장을 사용할 수 있다
 
 신호 6: 복잡한 JSON 쿼리, 배열 타입이 필요하다
   → PostgreSQL의 JSONB, 배열 타입이 필요
@@ -50,7 +59,7 @@ SQLite로 빠르게 시작했다면 언제 PostgreSQL로 넘어가야 할까? �
 
 ## SQLAlchemy로 전환이 쉬운 이유
 
-SQLAlchemy ORM을 사용했다면 DB URL만 바꾸면 된다.
+SQLAlchemy는 이식성을 높이지만 드라이버·스키마·타입·쿼리·트랜잭션·데이터 이관 검증이 필요하다.
 
 ```python
 # database.py
@@ -75,7 +84,7 @@ from sqlalchemy import create_engine
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
 
-# PostgreSQL 연결 풀 설정 (SQLite에서는 의미 없음)
+# DB별 풀 정책 설정. SQLAlchemy 2.x 파일 SQLite도 기본 QueuePool을 사용
 if DATABASE_URL.startswith("postgresql"):
     engine = create_engine(
         DATABASE_URL,
@@ -100,8 +109,8 @@ SQLAlchemy ORM은 대부분 추상화하지만, 일부 차이가 있다.
 | 불리언 | 0/1로 저장 | 네이티브 `BOOLEAN` |
 | 날짜 타입 | 문자열로 저장 | 네이티브 `TIMESTAMP` |
 | LIKE 대소문자 | 기본 무시 | 기본 구분 (ILIKE 사용) |
-| JSON | TEXT로 저장 | 네이티브 `JSONB` |
-| 동시 연결 수 | 사실상 1 (쓰기) | 수백~수천 |
+| JSON | JSON 함수·JSONB 지원. ORM 저장 방식 확인 | 네이티브 JSON·JSONB 지원 |
+| 동시성 | 여러 연결·reader, writer는 한 번에 하나 | 여러 writer 가능, 연결 예산·잠금은 별도 관리 |
 
 ```python
 # LIKE 쿼리 — PostgreSQL에서 대소문자 구분
@@ -148,8 +157,12 @@ sqlite_conn.row_factory = sqlite3.Row
 
 pg_conn = psycopg2.connect("postgresql://user:password@localhost:5432/myapp_db")
 
-# 테이블별 이전
+# 쓰기를 중지하고 백업한 원본을 사용한다. 비어 있는 대상 DB에 한 번만 실행한다.
 with pg_conn.cursor() as cur:
+    users = sqlite_conn.execute("SELECT id, email, hashed_password, created_at FROM users").fetchall()
+    if users:
+        execute_values(cur, "INSERT INTO users (id, email, hashed_password, created_at) VALUES %s",
+                       [tuple(row) for row in users])
     rows = sqlite_conn.execute("SELECT * FROM experiments").fetchall()
     if rows:
         execute_values(
@@ -158,10 +171,17 @@ with pg_conn.cursor() as cur:
             [(r["id"], r["name"], r["accuracy"], r["owner_id"], r["created_at"]) for r in rows],
         )
 
+    # 명시적 ID 복사 후 PostgreSQL의 다음 자동 ID를 원본 최댓값 이후로 이동
+    cur.execute("SELECT setval(pg_get_serial_sequence('users', 'id'), "
+                "COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM users")
+    cur.execute("SELECT setval(pg_get_serial_sequence('experiments', 'id'), "
+                "COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM experiments")
 pg_conn.commit()
 pg_conn.close()
 sqlite_conn.close()
 ```
+
+이 예제는 작은 DB의 일회성 이관이다. 사용자 테이블을 먼저 복사해 외래키를 만족시키고, ID sequence를 조정한다. 행 수·관계·날짜·불리언 값·최초 신규 INSERT와 애플리케이션 테스트를 확인한 뒤 전환한다. 대규모 DB에서는 전체 fetchall 대신 배치 이관과 실패 시 rollback·복구 절차를 작성한다.
 
 ## pgvector: PostgreSQL에서 벡터 검색
 
@@ -177,6 +197,7 @@ pip install pgvector sqlalchemy
 
 ```python
 # models.py — pgvector 사용
+# 먼저 해당 DB에서 CREATE EXTENSION vector를 실행할 권한과 확장 설치를 확인한다.
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, Integer, String, Text
 from database import Base
@@ -219,7 +240,7 @@ CREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops);
 ## 핵심 정리
 
 - **동시 쓰기 에러, 다중 서버, 벡터 검색이 필요하면 전환 시점이다** — 너무 일찍 전환할 필요는 없다
-- **SQLAlchemy ORM을 사용했다면 DATABASE_URL 교체만으로 대부분 전환된다** — SQL 직접 작성보다 이식성이 높다
+- **SQLAlchemy ORM을 사용했다면 드라이버·스키마·데이터·쿼리를 함께 검사해 전환한다** — SQL 직접 작성보다 이식성이 높다
 - **LIKE vs ILIKE, 불리언 처리 등 미묘한 차이를 확인한다** — 특히 대소문자 검색에 주의한다
 - **데이터 이전은 Alembic으로 스키마를 먼저 만들고, 스크립트로 데이터를 복사한다** — 순서가 중요하다
 - **pgvector는 PostgreSQL에서 벡터 유사도 검색을 가능하게 한다** — RAG 파이프라인에서 별도 벡터 DB 없이 활용할 수 있다

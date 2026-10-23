@@ -17,6 +17,12 @@ references:
   - title: "React 공식 문서 - useEffect"
     url: "https://react.dev/reference/react/useEffect"
     accessed: "2026-04-14"
+  - title: "React StrictMode"
+    url: "https://react.dev/reference/react/StrictMode"
+    accessed: "2026-10-23"
+  - title: "React useEffectEvent"
+    url: "https://react.dev/reference/react/useEffectEvent"
+    accessed: "2026-10-23"
 ---
 
 React 앱은 컴포넌트(Component)들의 트리로 이루어진다. 각 컴포넌트는 props를 입력으로 받고 JSX를 반환하는 함수다. Hook은 함수형 컴포넌트에서 상태와 사이드 이펙트를 다루는 메커니즘이다.
@@ -122,7 +128,7 @@ useEffect(() => {
   return () => {
     // 클린업 (컴포넌트 언마운트 또는 의존성 변경 시)
   }
-}, [의존성 배열])
+}, [dependency])
 ```
 
 의존성 배열에 따른 동작 차이:
@@ -130,7 +136,7 @@ useEffect(() => {
 | 의존성 배열 | 실행 시점 |
 |------------|-----------|
 | 없음 | 매 렌더링마다 |
-| `[]` (빈 배열) | 마운트 시 한 번 |
+| `[]` (빈 배열) | 마운트 시 설정, 언마운트 시 정리. 개발 StrictMode에서는 추가 설정·정리 검사 |
 | `[value]` | 마운트 + value 변경 시 |
 
 ```tsx
@@ -141,19 +147,28 @@ function UserProfile({ userId }: { userId: number }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
+    setUser(null)
 
-    fetch(`/api/users/${userId}`)
-      .then(res => res.json())
+    fetch(`/api/users/${userId}`, { signal: controller.signal })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
       .then(data => {
-        setUser(data)
-        setLoading(false)
+        if (!controller.signal.aborted) {
+          setUser(data)
+          setLoading(false)
+        }
       })
       .catch(err => {
+        if (controller.signal.aborted) return
         console.error('유저 로딩 실패:', err)
         setLoading(false)
       })
-  }, [userId])  // userId가 바뀔 때마다 재실행
+    return () => controller.abort()
+  }, [userId])  // userId가 바뀌면 이전 요청 정리
 
   if (loading) return <p>로딩 중...</p>
   if (!user) return <p>유저를 찾을 수 없습니다</p>
@@ -161,6 +176,8 @@ function UserProfile({ userId }: { userId: number }) {
   return <p>{user.name}</p>
 }
 ```
+
+Effect는 setup과 cleanup을 한 쌍으로 작성한다. 의존성이 바뀌면 이전 cleanup이 먼저 실행된다. React 19.2의 `useEffectEvent`는 Effect 안에서 최신 값을 읽는 비반응 로직을 분리하는 도구이며, 필요한 의존성을 숨기거나 일반 클릭 핸들러로 쓰는 도구가 아니다.
 
 ## TodoList 컴포넌트 예제
 
@@ -198,17 +215,13 @@ function TodoItem({ todo, onToggle, onDelete }: TodoItemProps) {
 
 // 메인 TodoList 컴포넌트 (state 관리)
 function TodoList() {
-  const [todos, setTodos] = useState<Todo[]>([])
+  // Vite CSR 예제: 저장된 값은 이 앱이 기록한 Todo[]라고 가정한다.
+  const [todos, setTodos] = useState<Todo[]>(() => {
+    const saved = localStorage.getItem('todos')
+    return saved ? JSON.parse(saved) : []
+  })
   const [input, setInput] = useState('')
   const [filter, setFilter] = useState<'all' | 'active' | 'done'>('all')
-
-  // 마운트 시 localStorage에서 복원
-  useEffect(() => {
-    const saved = localStorage.getItem('todos')
-    if (saved) {
-      setTodos(JSON.parse(saved))
-    }
-  }, [])
 
   // todos 변경 시 localStorage에 저장
   useEffect(() => {
@@ -288,6 +301,8 @@ function TodoList() {
 
 export default TodoList
 ```
+
+위 저장소 예제는 브라우저에서만 초기화하는 CSR 코드다. SSR에서는 첫 서버·클라이언트 렌더를 일치시키고 브라우저 저장소 복원을 별도로 설계한다. 외부에서 수정될 수 있는 localStorage 값에는 JSON 파싱 오류와 스키마 검증도 필요하다.
 
 ## 핵심 정리
 

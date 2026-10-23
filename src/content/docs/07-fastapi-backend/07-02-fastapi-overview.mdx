@@ -72,7 +72,7 @@ async def async_handler():
 
 ## Pydantic으로 스키마 정의하기
 
-FastAPI는 Pydantic v2를 사용해 요청 본문, 쿼리 파라미터, 응답을 검증한다.
+이 교재는 Pydantic v2를 사용해 요청 본문, 쿼리 파라미터, 응답을 검증한다.
 
 ```python
 from fastapi import FastAPI
@@ -115,9 +115,9 @@ HTTP/1.1 422 Unprocessable Entity
 {
   "detail": [
     {
-      "type": "value_error",
+      "type": "string_too_short",
       "loc": ["body", "name"],
-      "msg": "name은 공백일 수 없습니다",
+      "msg": "String should have at least 1 character",
       "input": ""
     },
     {
@@ -131,6 +131,8 @@ HTTP/1.1 422 Unprocessable Entity
 ```
 
 Pydantic이 중요한 이유는 **타입 검증 + JSON 스키마 자동 생성** 을 동시에 해결하기 때문이다. `Item` 모델 하나를 정의하면 FastAPI가 OpenAPI 스펙을 자동으로 만든다.
+
+빈 문자열은 `min_length` 검사에서 먼저 거부되므로 위 경우 사용자 validator의 메시지가 나오지 않는다. 공백 문자열은 validator에서 거부된다. 오류 본문의 추가 필드는 Pydantic·FastAPI 버전에 따라 달라질 수 있다.
 
 ## 자동 문서화
 

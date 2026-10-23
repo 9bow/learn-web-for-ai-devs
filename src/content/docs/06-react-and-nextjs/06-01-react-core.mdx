@@ -175,6 +175,6 @@ export default Counter
 
 - **선언적 UI** 는 "어떤 상태일 때 UI가 어떻게 보여야 하는가"를 기술한다 — DOM 조작을 직접 하지 않는다
 - **render / reconciliation / commit** 은 React가 선언한 UI를 실제 DOM에 반영하는 과정이다. 성능은 이 과정 자체가 아니라 실제 측정과 설계로 판단한다
-- **JSX** 는 `React.createElement` 함수 호출로 변환된다 — 브라우저가 아닌 빌드 도구가 처리한다
+- **JSX** 는 빌드 도구가 JavaScript 런타임 호출로 변환한다. 최신 자동 변환은 `react/jsx-runtime`을 사용한다
 - **상태(state)는 불변** 으로 다뤄야 한다 — 직접 변경하지 않고 setter 함수를 통해 교체한다
-- **key** 는 리스트 diff의 성능을 결정한다 — 인덱스 대신 고유 ID를 사용한다
+- **key** 는 형제 항목의 정체성과 상태 유지에 사용한다. 순서가 바뀌는 목록에서는 인덱스 대신 고유 ID를 사용한다

@@ -76,14 +76,14 @@ export const api = {
 }
 ```
 
-모든 API 호출은 이 객체를 통한다. 컴포넌트는 `fetch` 를 직접 호출하지 않는다.
+Vite의 최신 TypeScript 템플릿은 `verbatimModuleSyntax`를 사용하므로 `Todo`·`FormEvent` 같은 타입은 `type` import로 구분한다. fetch의 `as Promise<T>`는 응답의 실제 구조를 검증하지 않으며 여기서는 교재의 FastAPI 응답 계약을 신뢰한다. 모든 API 호출은 이 객체를 통한다. 컴포넌트는 `fetch` 를 직접 호출하지 않는다.
 
 ## TodoForm.tsx — 새 항목 입력
 
 ```tsx
 // frontend/src/components/TodoForm.tsx
-import { useState, FormEvent } from "react"
-import { api, Todo } from "../api"
+import { useState, type FormEvent } from "react"
+import { api, type Todo } from "../api"
 
 interface Props {
   onCreated: (todo: Todo) => void
@@ -146,7 +146,7 @@ export function TodoForm({ onCreated }: Props) {
 ```tsx
 // frontend/src/components/TodoItem.tsx
 import { useState } from "react"
-import { api, Todo } from "../api"
+import { api, type Todo } from "../api"
 
 interface Props {
   todo: Todo
@@ -232,7 +232,7 @@ export function TodoItem({ todo, onToggled, onDeleted }: Props) {
 
 ```tsx
 // frontend/src/components/TodoList.tsx
-import { Todo } from "../api"
+import type { Todo } from "../api"
 import { TodoItem } from "./TodoItem"
 
 interface Props {
@@ -266,7 +266,7 @@ export function TodoList({ todos, onToggled, onDeleted }: Props) {
 ```tsx
 // frontend/src/App.tsx
 import { useState, useEffect } from "react"
-import { api, Todo } from "./api"
+import { api, type Todo } from "./api"
 import { TodoList } from "./components/TodoList"
 import { TodoForm } from "./components/TodoForm"
 
@@ -276,10 +276,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let active = true
     api.list()
-      .then(setTodos)
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false))
+      .then((items) => { if (active) setTodos(items) })
+      .catch((err) => { if (active) setError(err.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [])
 
   function handleCreated(todo: Todo) {

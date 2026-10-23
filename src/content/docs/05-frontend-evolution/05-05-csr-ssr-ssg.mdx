@@ -52,7 +52,7 @@ SSG: 빌드 타임에 HTML 미리 생성, 정적 파일로 배포
 3. JS 실행, API 호출
 4. 데이터 수신 후 화면 렌더링 (사용자가 콘텐츠를 봄)
 
-단계 1~4까지 사용자는 빈 화면 혹은 로딩 스피너를 본다. 이를 **FOUC(Flash of Unstyled Content)** 또는 **빈 화면 문제** 라고 한다.
+단계 1~4까지 사용자는 빈 화면 혹은 로딩 스피너를 본다. 이는 콘텐츠 표시 지연이다. FOUC(Flash of Unstyled Content)는 스타일 적용 전 콘텐츠가 보이는 현상이므로 같은 용어로 부르지 않는다.
 
 ## SSR (Server-Side Rendering)
 
@@ -151,9 +151,11 @@ export default async function BlogPost({ params }) {
 - 최대한 빠른 응답 속도가 필요
 - 이 학습 사이트처럼 Starlight/Astro 기반 문서
 
+이 분류는 개념 비교다. 실제로는 정적 HTML 안에서 API로 실시간 데이터를 가져오거나, SSR 결과를 스트리밍할 수 있다. SSR이 항상 더 빠른 것은 아니므로 TTFB·LCP와 서버 비용을 측정한다.
+
 ## ISR: SSG의 실용적 타협점
 
-Next.js의 **Incremental Static Regeneration(ISR)** 은 SSG와 SSR의 중간이다. 정적으로 생성하되, 일정 시간이 지나면 백그라운드에서 재생성한다.
+다음 `next.revalidate` 예제는 Cache Components를 끈 Next.js의 기존 캐시 모델을 설명한다. 06-04에서 최신 Cache Components 모델을 별도로 다룬다. Next.js의 **Incremental Static Regeneration(ISR)** 은 SSG와 SSR의 중간이다. 정적으로 생성하되, 일정 시간이 지나면 백그라운드에서 재생성한다.
 
 ```tsx
 // ISR — 60초마다 재생성

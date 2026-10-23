@@ -20,6 +20,9 @@ references:
   - title: "FastAPI — StreamingResponse"
     url: "https://fastapi.tiangolo.com/advanced/custom-response/#streamingresponse"
     accessed: "2026-04-14"
+  - title: "FastAPI Background Tasks Caveat"
+    url: "https://fastapi.tiangolo.com/tutorial/background-tasks/#caveat"
+    accessed: "2026-10-23"
 ---
 
 AI 엔지니어 관점에서 FastAPI가 Flask나 Django보다 ML 서빙에 더 잘 맞는 이유는 단순히 "빠르기" 때문이 아니다. 비동기 I/O, 타입 기반 스키마, 스트리밍, 의존성 주입이 ML 워크로드의 특성과 정확히 맞아 떨어진다.
@@ -70,7 +73,7 @@ def get_sentiment_model():
     return ml_models["sentiment"]
 
 @app.post("/predict")
-async def predict(
+def predict(
     text: str,
     model: Annotated[object, Depends(get_sentiment_model)],
 ):
@@ -98,7 +101,10 @@ class PredictRequest(BaseModel):
     @field_validator("text")
     @classmethod
     def strip_text(cls, v: str) -> str:
-        return v.strip()
+        value = v.strip()
+        if not value:
+            raise ValueError("text는 공백일 수 없습니다")
+        return value
 
 class PredictResponse(BaseModel):
     label: str
@@ -106,7 +112,7 @@ class PredictResponse(BaseModel):
     model_version: str = "1.0.0"
 
 @app.post("/predict", response_model=PredictResponse)
-async def predict(
+def predict(
     req: PredictRequest,
     model: Annotated[object, Depends(get_sentiment_model)],
 ) -> PredictResponse:
@@ -128,9 +134,10 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
-from typing import AsyncGenerator
+from typing import Iterator
+import json
 
-async def token_stream(prompt: str) -> AsyncGenerator[str, None]:
+def token_stream(prompt: str) -> Iterator[str]:
     """토큰을 생성할 때마다 Server-Sent Events 형식으로 전송"""
     tokenizer = ml_models["tokenizer"]
     model = ml_models["llm"]
@@ -145,7 +152,7 @@ async def token_stream(prompt: str) -> AsyncGenerator[str, None]:
             token_text = tokenizer.decode(next_token_id[0])
 
             # SSE 형식: "data: <내용>\n\n"
-            yield f"data: {token_text}\n\n"
+            yield f"data: {json.dumps({'token': token_text}, ensure_ascii=False)}\n\n"
 
             input_ids = torch.cat([input_ids, next_token_id.unsqueeze(0)], dim=-1)
 
@@ -166,7 +173,7 @@ async def generate(prompt: str):
     )
 ```
 
-클라이언트에서는 `EventSource`(브라우저) 또는 `httpx`의 스트리밍 API로 소비한다.
+위 수동 토큰 루프는 원리를 설명하는 발췌이며 `ml_models["tokenizer"]`와 `ml_models["llm"]`를 별도로 준비해야 한다. 동기 iterator는 StreamingResponse가 스레드풀에서 소비한다. 실전 생성에는 03-05의 스트리머·취소·동시성 제한을 사용한다. POST 엔드포인트는 브라우저 EventSource로 직접 호출할 수 없으므로 fetch 또는 httpx로 읽는다.
 
 ```python
 # Python 클라이언트 예제
@@ -177,7 +184,7 @@ with httpx.Client() as client:
                        params={"prompt": "FastAPI는"}) as response:
         for line in response.iter_lines():
             if line.startswith("data: ") and not line.endswith("[DONE]"):
-                print(line[6:], end="", flush=True)
+                print(__import__("json").loads(line[6:])["token"], end="", flush=True)
 ```
 
 ## BackgroundTasks로 긴 추론 처리
@@ -185,7 +192,7 @@ with httpx.Client() as client:
 모델 추론이 수십 초 걸린다면, 즉시 job ID를 반환하고 결과를 비동기로 처리한다.
 
 ```python
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from uuid import uuid4
 
 # 간단한 인메모리 작업 저장소 (프로덕션에서는 Redis 사용)
@@ -214,6 +221,8 @@ async def get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job_store[job_id]
 ```
+
+위 BackgroundTasks 예제는 단일 프로세스 데모다. 응답을 보낸 뒤 같은 앱 프로세스에서 실행하므로 재시작 시 작업이 사라지고 다른 워커는 `job_store`를 공유하지 않는다. CPU·GPU 작업의 지속성·재시도·분산 처리가 필요하면 Celery 같은 별도 큐·worker를 사용한다.
 
 ## FastAPI vs Flask — ML 서빙 관점 비교
 

@@ -20,6 +20,9 @@ references:
   - title: "HAProxy — The Load Balancer"
     url: "https://www.haproxy.org/"
     accessed: "2026-04-14"
+  - title: "AWS Network Load Balancer Listeners"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-listeners.html"
+    accessed: "2026-10-23"
 ---
 
 로드밸런서는 클라이언트 요청을 여러 서버에 분산하는 컴포넌트다. "어느 레이어에서 트래픽을 이해하느냐"에 따라 L4와 L7로 나뉘며, 이 차이가 할 수 있는 일과 할 수 없는 일을 결정한다.
@@ -41,7 +44,8 @@ TCP/UDP 수준에서 동작한다. IP 주소와 포트 번호만 보고 트래�
 
 **특징:**
 - 매우 빠름 (패킷 헤더만 처리)
-- SSL 종료 없음 (암호화된 채로 서버에 전달)
+- TCP pass-through는 암호화된 트래픽을 그대로 전달
+- 제품의 TLS listener는 TLS 종료도 지원할 수 있음 (예: AWS NLB)
 - HTTP URL/헤더/쿠키 기반 라우팅 불가
 - TCP 연결 단위 분산
 
@@ -77,7 +81,7 @@ HTTP까지 파싱한다. URL 경로, 헤더, 쿠키, 요청 바디를 읽고 라
 |------|----|----|
 | 동작 레이어 | TCP/UDP | HTTP/HTTPS |
 | 처리 속도 | 매우 빠름 | L4 대비 느림 (파싱 비용) |
-| SSL 종료 | 불가 | 가능 |
+| TLS 종료 | 제품·listener에 따라 가능 | 가능 |
 | URL 기반 라우팅 | 불가 | 가능 |
 | Sticky Session | IP Hash만 | 쿠키 기반 |
 | Canary 배포 | 불가 | 가능 |
@@ -180,7 +184,7 @@ upstream backends {
 }
 ```
 
-ML 추론 서비스에서 Sticky Session이 필요한 경우: 모델의 KV 캐시나 대화 이력을 특정 워커 메모리에 저장하는 경우. 그러나 이는 Stateless 설계 원칙에 어긋나므로 가능하면 Redis 같은 외부 저장소로 상태를 분리하는 것이 권장된다.
+ML 추론 서비스에서 Sticky Session이 필요한 경우: 모델의 KV 캐시나 대화 이력을 특정 워커 메모리에 저장하는 경우. 그러나 대화 이력은 외부 저장소로 분리할 수 있다. GPU의 KV 캐시는 지연·메모리 비용 때문에 그대로 Redis에 옮긴다고 해결되지 않으며, 추론 엔진의 prefix cache와 라우팅 정책을 함께 설계한다.
 
 ### Canary 배포
 
@@ -202,7 +206,7 @@ location /api/ {
 ## 핵심 정리
 
 - L4는 IP/포트만 보고 TCP 연결을 분산한다. 빠르지만 HTTP 내용을 알 수 없다
-- L7은 HTTP를 파싱해 URL, 헤더, 쿠키 기반 라우팅이 가능하다. SSL 종료도 L7에서 처리한다
+- L7은 HTTP를 파싱해 URL, 헤더, 쿠키 기반 라우팅이 가능하다. TLS 종료 여부는 제품·listener 설정으로 결정한다
 - ML 추론처럼 요청마다 처리 시간이 다른 경우 Least Connections 알고리즘이 효과적이다
 - nginx는 L7 LB로 URL 기반 라우팅, SSL 종료, Canary 배포를 단일 설정으로 처리한다
 - Sticky Session은 Stateless 설계의 예외이므로 가능하면 외부 상태 저장소로 대체한다
